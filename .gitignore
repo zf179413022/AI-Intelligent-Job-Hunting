@@ -1,0 +1,39 @@
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+*.swp
+*.swo
+
+# Maven / Java
+**/target/
+**/out/
+**/build/
+*.class
+*.jar
+*.war
+*.log
+.mvn/wrapper/maven-wrapper.jar
+
+# Node / Vue (future)
+**/node_modules/
+**/dist/
+.npm/
+*.local
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+**/application-local.yml
+**/application-local.yaml
+**/application-secret.yml
+
+# Misc
+*.tmp
+*.bak
+.cursor/
