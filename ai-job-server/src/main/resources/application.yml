@@ -15,3 +15,6 @@ mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+jwt:
+  secret: ai-job-platform-jwt-secret-key-2026-secure
