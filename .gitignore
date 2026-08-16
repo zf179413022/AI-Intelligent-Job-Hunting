@@ -16,8 +16,17 @@ Thumbs.db
 *.class
 *.jar
 *.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
 *.log
 .mvn/wrapper/maven-wrapper.jar
+hs_err_pid*
+replay_pid*
+.mtj.tmp/
+*.ctxt
 
 # Node / Vue (future)
 **/node_modules/
