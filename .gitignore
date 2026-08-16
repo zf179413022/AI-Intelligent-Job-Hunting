@@ -42,6 +42,10 @@ replay_pid*
 **/application-local.yaml
 **/application-secret.yml
 
+# Local planning docs (do not publish)
+项目方案.md
+项目踩坑与简历素材.md
+
 # Misc
 *.tmp
 *.bak
