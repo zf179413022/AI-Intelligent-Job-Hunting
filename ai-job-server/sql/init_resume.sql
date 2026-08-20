@@ -1,0 +1,14 @@
+CREATE TABLE IF NOT EXISTS resume (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '简历ID',
+    user_id BIGINT NOT NULL COMMENT '用户ID',
+    file_name VARCHAR(255) NOT NULL COMMENT '原始文件名',
+    file_path VARCHAR(500) NOT NULL COMMENT '文件存储路径',
+    file_type VARCHAR(50) COMMENT '文件类型',
+    file_size BIGINT COMMENT '文件大小',
+    content TEXT COMMENT '简历文本内容',
+    status VARCHAR(20) DEFAULT 'UPLOADED' COMMENT '解析状态',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    INDEX idx_user_id (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户简历表';

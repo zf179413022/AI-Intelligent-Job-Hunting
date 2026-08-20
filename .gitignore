@@ -46,6 +46,14 @@ replay_pid*
 项目方案.md
 项目踩坑与简历素材.md
 
+# Python
+**/venv/
+**/__pycache__/
+*.pyc
+
+# Uploaded resumes (local files)
+**/uploads/
+
 # Misc
 *.tmp
 *.bak

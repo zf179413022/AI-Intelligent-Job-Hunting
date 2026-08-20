@@ -8,6 +8,11 @@ spring:
     password: ${MYSQL_PASSWORD:root}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
 server:
   port: 8080
 
@@ -18,3 +23,6 @@ mybatis-plus:
 
 jwt:
   secret: ai-job-platform-jwt-secret-key-2026-secure
+
+file:
+  upload-path: uploads/resumes

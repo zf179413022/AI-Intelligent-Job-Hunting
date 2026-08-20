@@ -1,4 +1,4 @@
-### 注册
+### 1. 注册（用户已存在会失败，可跳过）
 POST http://localhost:8080/api/auth/register
 Content-Type: application/json
 
@@ -8,7 +8,8 @@ Content-Type: application/json
   "email": "myq@example.com"
 }
 
-### 登录
+### 2. 登录（先点这个，会自动把 token 存起来）
+# @name login
 POST http://localhost:8080/api/auth/login
 Content-Type: application/json
 
@@ -16,3 +17,35 @@ Content-Type: application/json
   "username": "myq",
   "password": "123456"
 }
+
+> {%
+    client.global.set("token", response.body.token);
+%}
+
+### 3. 查看我的简历（必须先成功执行上面的登录）
+GET http://localhost:8080/api/resumes
+Authorization: Bearer {{token}}
+
+### 4. 上传简历（把下面路径换成你自己的 PDF）
+POST http://localhost:8080/api/resumes/upload
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="resume.pdf"
+Content-Type: application/pdf
+
+< C:\Users\qqjer\Desktop\简历\简历 (1).pdf
+--WebAppBoundary--
+
+### 5. 解析简历（把 id 改成真实 resumeId）
+POST http://localhost:8080/api/resumes/3/parse
+Authorization: Bearer {{token}}
+
+### 6. AI 分析简历（Java 调用 Python，需先 parse）
+POST http://localhost:8080/api/resumes/3/ai-analyze
+Authorization: Bearer {{token}}
+
+### 7. 删除简历（把 id 改成真实 resumeId）
+DELETE http://localhost:8080/api/resumes/2
+Authorization: Bearer {{token}}
