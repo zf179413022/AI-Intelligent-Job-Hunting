@@ -46,6 +46,10 @@ Authorization: Bearer {{token}}
 POST http://localhost:8080/api/resumes/3/ai-analyze
 Authorization: Bearer {{token}}
 
-### 7. 删除简历（把 id 改成真实 resumeId）
+### 7. 查询最新 AI 分析结果
+GET http://localhost:8080/api/resumes/3/ai-analysis
+Authorization: Bearer {{token}}
+
+### 8. 删除简历（把 id 改成真实 resumeId）
 DELETE http://localhost:8080/api/resumes/2
 Authorization: Bearer {{token}}
