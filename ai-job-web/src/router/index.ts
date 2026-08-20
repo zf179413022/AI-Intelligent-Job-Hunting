@@ -1,0 +1,54 @@
+import { createRouter, createWebHistory } from 'vue-router'
+import { getToken } from '@/utils/auth'
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('@/views/Login.vue'),
+      meta: { public: true },
+    },
+    {
+      path: '/',
+      component: () => import('@/layouts/MainLayout.vue'),
+      redirect: '/dashboard',
+      children: [
+        {
+          path: 'dashboard',
+          name: 'dashboard',
+          component: () => import('@/views/Dashboard.vue'),
+        },
+        {
+          path: 'resumes',
+          name: 'resumes',
+          component: () => import('@/views/ResumeList.vue'),
+        },
+        {
+          path: 'resumes/:id/analysis',
+          name: 'resume-analysis',
+          component: () => import('@/views/ResumeAnalysis.vue'),
+        },
+        {
+          path: 'jobs',
+          name: 'jobs',
+          component: () => import('@/views/JobMatch.vue'),
+        },
+      ],
+    },
+  ],
+})
+
+router.beforeEach((to) => {
+  const token = getToken()
+  if (!to.meta.public && !token) {
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
+  if (to.path === '/login' && token) {
+    return { path: '/dashboard' }
+  }
+  return true
+})
+
+export default router
