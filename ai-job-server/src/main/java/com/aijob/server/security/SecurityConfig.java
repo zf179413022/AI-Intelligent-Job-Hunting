@@ -40,11 +40,12 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
 
                 .authorizeHttpRequests(auth -> auth
-                        // 注册、登录允许匿名访问
+                        // 注册、登录允许匿名访问；/error 放行避免异常被二次鉴权成空 403
                         .requestMatchers(
                                 "/api/auth/register",
                                 "/api/auth/login",
-                                "/api/hello"
+                                "/api/hello",
+                                "/error"
                         ).permitAll()
 
                         // 其他接口必须登录
