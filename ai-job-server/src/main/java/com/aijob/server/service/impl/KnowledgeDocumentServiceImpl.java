@@ -2,10 +2,13 @@ package com.aijob.server.service.impl;
 
 import com.aijob.server.entity.KnowledgeChunk;
 import com.aijob.server.entity.KnowledgeDocument;
+import com.aijob.server.exception.ForbiddenException;
 import com.aijob.server.mapper.KnowledgeChunkMapper;
 import com.aijob.server.mapper.KnowledgeDocumentMapper;
 import com.aijob.server.service.KnowledgeDocumentService;
-import com.aijob.server.util.PdfTextExtractor;
+import com.aijob.server.service.KnowledgeVectorStoreService;
+import com.aijob.server.util.DocumentExtractResult;
+import com.aijob.server.util.DocumentTextExtractor;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -17,24 +20,30 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
 public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
 
     private static final long MAX_FILE_SIZE = 20L * 1024 * 1024;
+    private static final Set<String> ALLOWED_EXT = Set.of("pdf", "md");
 
     private final KnowledgeDocumentMapper knowledgeDocumentMapper;
     private final KnowledgeChunkMapper knowledgeChunkMapper;
+    private final KnowledgeVectorStoreService knowledgeVectorStoreService;
 
     @Value("${file.knowledge-upload-path:uploads/knowledge}")
     private String knowledgeUploadPath;
 
     public KnowledgeDocumentServiceImpl(
             KnowledgeDocumentMapper knowledgeDocumentMapper,
-            KnowledgeChunkMapper knowledgeChunkMapper) {
+            KnowledgeChunkMapper knowledgeChunkMapper,
+            KnowledgeVectorStoreService knowledgeVectorStoreService) {
         this.knowledgeDocumentMapper = knowledgeDocumentMapper;
         this.knowledgeChunkMapper = knowledgeChunkMapper;
+        this.knowledgeVectorStoreService = knowledgeVectorStoreService;
     }
 
     @Override
@@ -49,16 +58,17 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
             throw new RuntimeException("文件名不能为空");
         }
 
-        String lowerName = originalFilename.toLowerCase();
-        if (!lowerName.endsWith(".pdf")) {
-            throw new RuntimeException("知识库首版仅支持 PDF 格式");
+        String ext = extensionOf(originalFilename);
+        if (!ALLOWED_EXT.contains(ext)) {
+            throw new RuntimeException("知识库仅支持 PDF / Markdown（.pdf / .md）");
         }
 
         if (file.getSize() > MAX_FILE_SIZE) {
             throw new RuntimeException("文件大小不能超过 20MB");
         }
 
-        String storedFileName = UUID.randomUUID() + ".pdf";
+        String fileType = "pdf".equals(ext) ? "PDF" : "MD";
+        String storedFileName = UUID.randomUUID() + "." + ext;
         Path target;
         try {
             Path userDir = Paths.get(knowledgeUploadPath, String.valueOf(userId))
@@ -89,7 +99,7 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
         document.setTitle(title);
         document.setFileName(originalFilename);
         document.setFilePath(target.toString());
-        document.setFileType("PDF");
+        document.setFileType(fileType);
         document.setFileSize(file.getSize());
         document.setStatus("UPLOADED");
         document.setChunkCount(null);
@@ -127,6 +137,9 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
     public void delete(Long id, Long userId) {
         KnowledgeDocument document = requireOwned(id, userId);
 
+        // 先删向量（校验 user_id），再删 MySQL chunk / 文件 / 文档
+        knowledgeVectorStoreService.deleteByDocument(document.getId(), userId);
+
         knowledgeChunkMapper.delete(
                 new LambdaQueryWrapper<KnowledgeChunk>()
                         .eq(KnowledgeChunk::getDocumentId, document.getId())
@@ -152,24 +165,27 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
     private KnowledgeDocument parseInternal(KnowledgeDocument document) {
         try {
             Path path = Paths.get(document.getFilePath());
-            PdfTextExtractor.PdfExtractResult result = PdfTextExtractor.extractDetailed(path);
+            DocumentExtractResult result = DocumentTextExtractor.extractDetailed(path, document.getFileType());
 
             if (result.text() == null || result.text().isBlank()) {
                 document.setStatus("FAILED");
-                document.setErrorMessage("未能从 PDF 中提取到文本（可能是扫描件）");
+                if ("MD".equalsIgnoreCase(document.getFileType())) {
+                    document.setErrorMessage("未能从 Markdown 中提取到文本（可能是空文件）");
+                } else {
+                    document.setErrorMessage("未能从 PDF 中提取到文本（可能是扫描件）");
+                }
                 document.setPageCount(result.pageCount());
                 knowledgeDocumentMapper.updateById(document);
                 return knowledgeDocumentMapper.selectById(document.getId());
             }
 
-            // 成功：只更新状态与页数，不把全文写入 knowledge_document
             document.setStatus("PARSED");
             document.setPageCount(result.pageCount());
             document.setErrorMessage(null);
             knowledgeDocumentMapper.updateById(document);
             return knowledgeDocumentMapper.selectById(document.getId());
         } catch (Exception e) {
-            String message = e.getMessage() == null ? "PDF解析失败" : e.getMessage();
+            String message = e.getMessage() == null ? "文档解析失败" : e.getMessage();
             if (message.length() > 480) {
                 message = message.substring(0, 480);
             }
@@ -180,13 +196,21 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
         }
     }
 
+    private static String extensionOf(String filename) {
+        int dot = filename.lastIndexOf('.');
+        if (dot < 0 || dot == filename.length() - 1) {
+            return "";
+        }
+        return filename.substring(dot + 1).toLowerCase(Locale.ROOT);
+    }
+
     private KnowledgeDocument requireOwned(Long id, Long userId) {
         KnowledgeDocument document = knowledgeDocumentMapper.selectById(id);
         if (document == null) {
             throw new RuntimeException("知识库文档不存在");
         }
         if (!document.getUserId().equals(userId)) {
-            throw new RuntimeException("无权访问该知识库文档");
+            throw new ForbiddenException("无权访问该知识库文档");
         }
         return document;
     }

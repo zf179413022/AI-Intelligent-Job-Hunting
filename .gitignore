@@ -54,7 +54,17 @@ replay_pid*
 # Uploaded resumes (local files)
 **/uploads/
 
+# Chroma / local RAG runtime & smoke artifacts
+**/data/chroma/
+**/data/chromadb/
+ai-job-server/data/
+
+# Local knowledge corpora (JavaGuide 等第三方资料，勿入库)
+knowledge-pack/
+知识库存放/
+
 # Misc
 *.tmp
 *.bak
 .cursor/
+skills-lock.json

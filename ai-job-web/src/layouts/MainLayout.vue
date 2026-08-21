@@ -33,6 +33,14 @@
           <el-icon><ChatDotRound /></el-icon>
           <span>AI模拟面试</span>
         </el-menu-item>
+        <el-menu-item index="/knowledge">
+          <el-icon><Collection /></el-icon>
+          <span>知识库文档</span>
+        </el-menu-item>
+        <el-menu-item index="/knowledge/ask">
+          <el-icon><ChatLineSquare /></el-icon>
+          <span>AI知识问答</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -70,6 +78,8 @@ const activeMenu = computed(() => {
   if (route.path.startsWith('/resumes')) return '/resumes'
   if (route.path.startsWith('/job-match')) return '/job-match'
   if (route.path.startsWith('/interviews')) return '/interviews'
+  if (route.path.startsWith('/knowledge/ask')) return '/knowledge/ask'
+  if (route.path.startsWith('/knowledge')) return '/knowledge'
   return route.path
 })
 
@@ -85,6 +95,8 @@ const pageTitle = computed(() => {
   }
   if (route.path.match(/\/interviews\/\d+/)) return '面试进行中'
   if (route.path.startsWith('/interviews')) return 'AI 模拟面试'
+  if (route.path.startsWith('/knowledge/ask')) return 'AI 知识问答'
+  if (route.path.startsWith('/knowledge')) return '知识库文档'
   return '首页'
 })
 

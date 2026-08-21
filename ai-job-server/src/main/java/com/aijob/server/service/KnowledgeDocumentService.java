@@ -8,7 +8,7 @@ import java.util.List;
 public interface KnowledgeDocumentService {
 
     /**
-     * 上传 PDF 并尝试解析：成功 → PARSED，失败 → FAILED（不落全文）。
+     * 上传 PDF / Markdown 并尝试解析：成功 → PARSED，失败 → FAILED（不落全文）。
      */
     KnowledgeDocument upload(MultipartFile file, Long userId);
 

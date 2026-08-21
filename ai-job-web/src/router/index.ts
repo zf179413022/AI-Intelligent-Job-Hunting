@@ -59,6 +59,16 @@ const router = createRouter({
           name: 'interview-room',
           component: () => import('@/views/InterviewRoom.vue'),
         },
+        {
+          path: 'knowledge',
+          name: 'knowledge',
+          component: () => import('@/views/KnowledgeList.vue'),
+        },
+        {
+          path: 'knowledge/ask',
+          name: 'knowledge-ask',
+          component: () => import('@/views/KnowledgeAsk.vue'),
+        },
       ],
     },
   ],

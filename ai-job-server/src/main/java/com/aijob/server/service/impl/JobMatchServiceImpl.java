@@ -1,5 +1,7 @@
 package com.aijob.server.service.impl;
 
+import com.aijob.server.exception.ForbiddenException;
+
 import com.aijob.server.dto.JobMatchRequest;
 import com.aijob.server.entity.JobMatch;
 import com.aijob.server.entity.Resume;
@@ -36,7 +38,7 @@ public class JobMatchServiceImpl implements JobMatchService {
         }
 
         if (!resume.getUserId().equals(userId)) {
-            throw new RuntimeException("无权使用该简历");
+            throw new ForbiddenException("无权使用该简历");
         }
 
         if (resume.getContent() == null || resume.getContent().isBlank()) {
@@ -98,7 +100,7 @@ public class JobMatchServiceImpl implements JobMatchService {
         }
 
         if (!record.getUserId().equals(userId)) {
-            throw new RuntimeException("无权访问该记录");
+            throw new ForbiddenException("无权访问该记录");
         }
 
         return record;

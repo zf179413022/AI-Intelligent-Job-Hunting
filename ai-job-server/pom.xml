@@ -19,6 +19,7 @@
 
     <properties>
         <java.version>21</java.version>
+        <langchain4j.version>1.11.9-beta19</langchain4j.version>
     </properties>
 
     <dependencies>
@@ -87,6 +88,32 @@
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>
             <version>3.0.5</version>
+        </dependency>
+
+        <!-- LangChain4j：OpenAI-compatible ChatModel（DeepSeek） -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
+            <version>${langchain4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j</artifactId>
+            <version>1.11.0</version>
+        </dependency>
+
+        <!-- LangChain4j：本地 ONNX Embedding（不依赖 Python / DeepSeek Embedding API） -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-embeddings-all-minilm-l6-v2-q</artifactId>
+            <version>1.0.0-beta5</version>
+        </dependency>
+
+        <!-- LangChain4j：Chroma Vector Store（V2 API，对接本地持久化 Chroma） -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-chroma</artifactId>
+            <version>1.11.9-beta19</version>
         </dependency>
 
         <dependency>

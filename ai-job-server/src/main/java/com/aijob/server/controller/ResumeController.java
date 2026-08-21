@@ -1,5 +1,7 @@
 package com.aijob.server.controller;
 
+import com.aijob.server.exception.ForbiddenException;
+
 import com.aijob.server.entity.Resume;
 import com.aijob.server.entity.User;
 import com.aijob.server.entity.ai.ResumeAiAnalysis;
@@ -134,7 +136,7 @@ public class ResumeController {
         }
 
         if (!resume.getUserId().equals(user.getId())) {
-            throw new RuntimeException("无权访问该简历");
+            throw new ForbiddenException("无权访问该简历");
         }
 
         if (resume.getContent() == null || resume.getContent().isBlank()) {
@@ -191,7 +193,7 @@ public class ResumeController {
         }
 
         if (!resume.getUserId().equals(user.getId())) {
-            throw new RuntimeException("无权访问该简历");
+            throw new ForbiddenException("无权访问该简历");
         }
 
         ResumeAiAnalysis analysis = resumeAiAnalysisMapper.selectOne(

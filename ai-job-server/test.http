@@ -159,3 +159,52 @@ Authorization: Bearer {{token}}
 ### 26. 删除知识库文档
 DELETE http://localhost:8080/api/knowledge/documents/{{knowledgeDocId}}
 Authorization: Bearer {{token}}
+
+### 27. LangChain4j → DeepSeek 最小验证（RAG 5.3，非完整 RAG）
+POST http://localhost:8080/api/knowledge/ai/chat
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "prompt": "用一句话解释什么是 HashMap，不要超过40字。"
+}
+
+### 28. Chunk + Embedding + 写入 Chroma（RAG 5.5）
+# 前置：Docker Chroma 已启动（scripts/start-chroma-docker.cmd）
+POST http://localhost:8080/api/knowledge/documents/{{knowledgeDocId}}/ingest
+Authorization: Bearer {{token}}
+
+### 29. 查看分块列表（应含 vectorId）
+GET http://localhost:8080/api/knowledge/documents/{{knowledgeDocId}}/chunks
+Authorization: Bearer {{token}}
+
+### 30. RAG 5.6.1：仅 Top-K 检索（不调用 DeepSeek）
+POST http://localhost:8080/api/knowledge/ai/retrieve
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "question": "Java中的HashMap是怎么实现的？",
+  "topK": 5
+}
+
+### 31. RAG 5.6：完整问答（Top-K + Context + DeepSeek + Sources）
+POST http://localhost:8080/api/knowledge/ai/ask
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "question": "Java中的HashMap是怎么实现的？",
+  "topK": 5
+}
+
+### 32. RAG 5.9：SSE 流式问答（event=meta|delta|done|error）
+POST http://localhost:8080/api/knowledge/ai/ask/stream
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "question": "How does Spring Boot autoconfiguration work?",
+  "topK": 5
+}

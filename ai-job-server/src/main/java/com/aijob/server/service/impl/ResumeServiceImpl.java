@@ -1,5 +1,7 @@
 package com.aijob.server.service.impl;
 
+import com.aijob.server.exception.ForbiddenException;
+
 import com.aijob.server.entity.Resume;
 import com.aijob.server.mapper.ResumeMapper;
 import com.aijob.server.service.ResumeService;
@@ -98,7 +100,7 @@ public class ResumeServiceImpl implements ResumeService {
 
         // 数据权限校验
         if (!resume.getUserId().equals(userId)) {
-            throw new RuntimeException("无权删除该简历");
+            throw new ForbiddenException("无权删除该简历");
         }
 
         try {
@@ -125,7 +127,7 @@ public class ResumeServiceImpl implements ResumeService {
 
         // 数据权限校验
         if (!resume.getUserId().equals(userId)) {
-            throw new RuntimeException("无权解析该简历");
+            throw new ForbiddenException("无权解析该简历");
         }
 
         if (!".pdf".equalsIgnoreCase(resume.getFileType())) {

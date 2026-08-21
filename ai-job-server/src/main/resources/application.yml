@@ -42,3 +42,36 @@ interview:
   redis:
     # 面试临时会话 TTL（秒），answer 时刷新
     session-ttl-seconds: 7200
+
+# LangChain4j → DeepSeek（OpenAI 兼容协议）；Key 仅从环境变量读取
+langchain4j:
+  open-ai:
+    chat-model:
+      api-key: ${DEEPSEEK_API_KEY:}
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+      model-name: ${DEEPSEEK_MODEL:deepseek-v4-flash}
+      temperature: 0.3
+      timeout: PT60S
+      log-requests: false
+      log-responses: false
+    # RAG 5.9：流式 ChatModel（与同步 chat-model 共用 DeepSeek 配置）
+    streaming-chat-model:
+      api-key: ${DEEPSEEK_API_KEY:}
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+      model-name: ${DEEPSEEK_MODEL:deepseek-v4-flash}
+      temperature: 0.3
+      timeout: PT120S
+      log-requests: false
+      log-responses: false
+
+# Chroma：LangChain4j 通过 HTTP 访问 Docker 中的 Chroma（见 docker-compose.chroma.yml）
+knowledge:
+  chroma:
+    base-url: ${CHROMA_BASE_URL:http://127.0.0.1:8000}
+    collection-name: knowledge_chunks
+    timeout-seconds: 60
+  rag:
+    # Top-K 相似度检索条数（默认 5，允许请求覆盖）
+    top-k: 5
+    # 最低相似度分数（LangChain4j cosine score，0~1）；过低则不注入该命中
+    min-score: 0.2

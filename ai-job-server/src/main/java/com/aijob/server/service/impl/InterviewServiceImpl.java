@@ -1,5 +1,7 @@
 package com.aijob.server.service.impl;
 
+import com.aijob.server.exception.ForbiddenException;
+
 import com.aijob.server.dto.InterviewSession;
 import com.aijob.server.entity.Interview;
 import com.aijob.server.entity.InterviewMessage;
@@ -63,7 +65,7 @@ public class InterviewServiceImpl implements InterviewService {
         }
 
         if (!resume.getUserId().equals(userId)) {
-            throw new RuntimeException("无权使用该简历进行面试");
+            throw new ForbiddenException("无权使用该简历进行面试");
         }
 
         if (resume.getContent() == null || resume.getContent().isBlank()) {
@@ -102,7 +104,7 @@ public class InterviewServiceImpl implements InterviewService {
         }
 
         if (!interview.getUserId().equals(userId)) {
-            throw new RuntimeException("无权访问该面试");
+            throw new ForbiddenException("无权访问该面试");
         }
 
         return interview;
@@ -544,7 +546,7 @@ public class InterviewServiceImpl implements InterviewService {
         }
 
         if (!resume.getUserId().equals(interview.getUserId())) {
-            throw new RuntimeException("无权使用该简历进行面试");
+            throw new ForbiddenException("无权使用该简历进行面试");
         }
 
         if (resume.getContent() == null || resume.getContent().isBlank()) {
