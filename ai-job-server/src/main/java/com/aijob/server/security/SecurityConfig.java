@@ -52,6 +52,11 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
 
+                // 允许异步请求（SseEmitter）继承安全上下文
+                .securityContext(securityContext ->
+                        securityContext.requireExplicitSave(false)
+                )
+
                 // JWT 过滤器放在用户名密码过滤器之前
                 .addFilterBefore(
                         jwtAuthenticationFilter,

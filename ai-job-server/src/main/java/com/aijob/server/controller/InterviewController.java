@@ -13,9 +13,15 @@ import com.aijob.server.vo.InterviewAnswerVO;
 import com.aijob.server.vo.InterviewStartVO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
+import org.springframework.security.concurrent.DelegatingSecurityContextRunnable;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
+import java.util.concurrent.ExecutorService;
 
 @RestController
 @RequestMapping("/api/interviews")
@@ -24,14 +30,17 @@ public class InterviewController {
     private final InterviewService interviewService;
     private final LoginUserUtil loginUserUtil;
     private final UserMapper userMapper;
+    private final ExecutorService sseExecutor;
 
     public InterviewController(
             InterviewService interviewService,
             LoginUserUtil loginUserUtil,
-            UserMapper userMapper) {
+            UserMapper userMapper,
+            ExecutorService sseExecutor) {
         this.interviewService = interviewService;
         this.loginUserUtil = loginUserUtil;
         this.userMapper = userMapper;
+        this.sseExecutor = sseExecutor;
     }
 
     @PostMapping
@@ -53,6 +62,40 @@ public class InterviewController {
             @PathVariable Long id,
             @Valid @RequestBody InterviewAnswerRequest request) {
         return interviewService.answer(id, currentUser().getId(), request.getAnswer());
+    }
+
+    /**
+     * SSE 流式回答：event=delta|done|error
+     */
+    @PostMapping(value = "/{id}/answer/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter answerStream(
+            @PathVariable Long id,
+            @Valid @RequestBody InterviewAnswerRequest request) {
+        Long userId = currentUser().getId();
+        String answer = request.getAnswer();
+        SecurityContext securityContext = SecurityContextHolder.getContext();
+        SseEmitter emitter = new SseEmitter(180_000L);
+
+        Runnable task = () -> {
+            try {
+                interviewService.answerStream(id, userId, answer, emitter);
+            } catch (Exception e) {
+                try {
+                    emitter.send(SseEmitter.event()
+                            .name("error")
+                            .data(java.util.Map.of(
+                                    "message",
+                                    e.getMessage() == null ? "流式面试失败" : e.getMessage()
+                            )));
+                    emitter.complete();
+                } catch (Exception ex) {
+                    emitter.completeWithError(ex);
+                }
+            }
+        };
+
+        sseExecutor.execute(new DelegatingSecurityContextRunnable(task, securityContext));
+        return emitter;
     }
 
     @PostMapping("/{id}/finish")

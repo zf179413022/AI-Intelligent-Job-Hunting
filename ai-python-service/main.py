@@ -3,6 +3,7 @@ import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -367,6 +368,156 @@ def interview_answer(req: InterviewAnswerRequest):
         "nextQuestion": next_question,
         "shouldContinue": should_continue,
     }
+
+
+def _sse_data(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _parse_stream_answer_text(text: str, user_rounds: int) -> dict:
+    """解析流式输出中的【点评】/【追问】/【继续】标记。"""
+    raw = (text or "").strip()
+    evaluation = ""
+    next_question = ""
+    should_continue = True
+
+    if "【点评】" in raw:
+        after = raw.split("【点评】", 1)[1]
+        if "【追问】" in after:
+            evaluation = after.split("【追问】", 1)[0].strip()
+            rest = after.split("【追问】", 1)[1]
+            if "【继续】" in rest:
+                next_question = rest.split("【继续】", 1)[0].strip()
+                flag = rest.split("【继续】", 1)[1].strip().lower()
+                should_continue = flag.startswith("true") or flag.startswith("是")
+            else:
+                next_question = rest.strip()
+        else:
+            evaluation = after.strip()
+    else:
+        # 兜底：尝试按 JSON 解析
+        try:
+            cleaned = raw
+            if cleaned.startswith("```"):
+                cleaned = cleaned.strip("`")
+                if cleaned.lower().startswith("json"):
+                    cleaned = cleaned[4:].strip()
+            obj = json.loads(cleaned)
+            evaluation = str(obj.get("evaluation") or "").strip()
+            next_question = str(obj.get("nextQuestion") or "").strip()
+            should_continue = bool(obj.get("shouldContinue", True))
+        except Exception:
+            evaluation = raw or "已记录你的回答。"
+
+    if user_rounds >= 5:
+        should_continue = False
+
+    if not should_continue:
+        next_question = ""
+
+    return {
+        "evaluation": evaluation or "已记录你的回答。",
+        "nextQuestion": next_question,
+        "shouldContinue": should_continue,
+    }
+
+
+@app.post("/api/ai/interview/answer/stream")
+def interview_answer_stream(req: InterviewAnswerRequest):
+    """SSE 流式点评 + 追问。事件：delta / done / error"""
+    resume_content = (req.resumeContent or "").strip()
+    position = (req.position or "").strip()
+    current_question = (req.currentQuestion or "").strip()
+    user_answer = (req.userAnswer or "").strip()
+
+    if not resume_content:
+        raise HTTPException(status_code=400, detail="resumeContent 不能为空")
+    if not position:
+        raise HTTPException(status_code=400, detail="position 不能为空")
+    if not current_question:
+        raise HTTPException(status_code=400, detail="currentQuestion 不能为空")
+    if not user_answer:
+        raise HTTPException(status_code=400, detail="userAnswer 不能为空")
+
+    history_text = _format_history(req.history or [])
+    user_rounds = sum(1 for h in (req.history or []) if (h.role or "").upper() == "USER")
+
+    prompt = f"""你是一名严格但友好的 IT 技术面试官，岗位：{position}。
+
+任务：
+1. 简要点评候选人刚刚的回答。
+2. 基于回答给出下一道追问（若不继续可空）。
+3. 决定是否继续面试。
+
+规则：
+1. 不得虚构候选人没有的经历或技能。
+2. 追问围绕 Java / Spring / MySQL / Redis 等岗位相关技术。
+3. 若已进行较多轮次（候选人已答约 5 轮及以上），【继续】写 false。
+4. 当前候选人历史回答轮次约：{user_rounds}
+5. 严格按照下面格式输出，不要 JSON，不要 markdown：
+
+【点评】
+（点评内容，可多行）
+【追问】
+（下一道追问；若不继续则留空）
+【继续】
+true
+
+简历摘要（供参考）：
+{resume_content[:3000]}
+
+历史对话：
+{history_text}
+
+当前问题：
+{current_question}
+
+候选人回答：
+{user_answer}
+"""
+
+    def event_generator():
+        buffer = ""
+        try:
+            client = get_client()
+            stream = client.chat.completions.create(
+                model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是专业的 IT 技术面试官。请严格按指定标记格式输出，不要使用 JSON。",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                stream=True,
+                temperature=0.3,
+            )
+            for chunk in stream:
+                delta = ""
+                if chunk.choices and chunk.choices[0].delta:
+                    delta = chunk.choices[0].delta.content or ""
+                if not delta:
+                    continue
+                buffer += delta
+                yield _sse_data("delta", {"content": delta})
+
+            result = _parse_stream_answer_text(buffer, user_rounds)
+            if result["shouldContinue"] and not result["nextQuestion"]:
+                yield _sse_data("error", {"message": "AI未返回下一题"})
+                return
+            yield _sse_data("done", result)
+        except Exception as e:
+            yield _sse_data("error", {"message": f"AI面试流式调用失败：{str(e)}"})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/ai/interview/report")

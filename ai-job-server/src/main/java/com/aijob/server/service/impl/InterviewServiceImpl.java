@@ -11,6 +11,7 @@ import com.aijob.server.entity.ai.InterviewStartAiResult;
 import com.aijob.server.mapper.InterviewMapper;
 import com.aijob.server.mapper.InterviewReportMapper;
 import com.aijob.server.service.AiInterviewService;
+import com.aijob.server.service.InterviewAnswerStreamHandler;
 import com.aijob.server.service.InterviewMessageService;
 import com.aijob.server.service.InterviewService;
 import com.aijob.server.service.InterviewSessionService;
@@ -24,11 +25,15 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Slf4j
@@ -198,8 +203,121 @@ public class InterviewServiceImpl implements InterviewService {
             throw new RuntimeException("AI面试回答分析失败");
         }
 
+        PersistedAnswer persisted = persistAnswerResult(
+                interview, resume, historyBundle, history, answer.trim(), aiResult
+        );
+
+        return new InterviewAnswerVO(
+                interviewMapper.selectById(id),
+                persisted.evaluation(),
+                persisted.aiMessage(),
+                persisted.shouldContinue()
+        );
+    }
+
+    @Override
+    public void answerStream(Long id, Long userId, String answer, SseEmitter emitter) {
+        try {
+            Interview interview = getById(id, userId);
+
+            if (!"RUNNING".equals(interview.getStatus())) {
+                sendSseError(emitter, "当前面试未在进行中，无法回答");
+                return;
+            }
+
+            if (answer == null || answer.isBlank()) {
+                sendSseError(emitter, "回答内容不能为空");
+                return;
+            }
+
+            Resume resume = requireParsedResume(interview);
+            HistoryBundle historyBundle = loadHistoryForAi(interview, resume);
+            List<InterviewMessage> history = historyBundle.messages();
+
+            String currentQuestion = findLatestAiQuestion(history);
+            if (currentQuestion == null) {
+                sendSseError(emitter, "未找到当前面试题，请重新开始面试");
+                return;
+            }
+
+            final String trimmedAnswer = answer.trim();
+            aiInterviewService.answerStream(
+                    historyBundle.resumeContent(),
+                    interview.getPosition(),
+                    history,
+                    currentQuestion,
+                    trimmedAnswer,
+                    new InterviewAnswerStreamHandler() {
+                        @Override
+                        public void onDelta(String content) {
+                            try {
+                                emitter.send(SseEmitter.event()
+                                        .name("delta")
+                                        .data(Map.of("content", content)));
+                            } catch (IOException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }
+
+                        @Override
+                        public void onDone(InterviewAnswerAiResult aiResult) {
+                            try {
+                                if (aiResult == null) {
+                                    sendSseError(emitter, "AI面试回答分析失败");
+                                    return;
+                                }
+                                PersistedAnswer persisted = persistAnswerResult(
+                                        interview,
+                                        resume,
+                                        historyBundle,
+                                        history,
+                                        trimmedAnswer,
+                                        aiResult
+                                );
+                                Map<String, Object> payload = new LinkedHashMap<>();
+                                payload.put("evaluation", persisted.evaluation());
+                                payload.put(
+                                        "nextQuestion",
+                                        aiResult.getNextQuestion() == null
+                                                ? ""
+                                                : aiResult.getNextQuestion().trim()
+                                );
+                                payload.put("shouldContinue", persisted.shouldContinue());
+                                payload.put("message", persisted.aiMessage());
+                                payload.put("interview", interviewMapper.selectById(id));
+                                emitter.send(SseEmitter.event().name("done").data(payload));
+                                emitter.complete();
+                            } catch (Exception e) {
+                                sendSseError(emitter, e.getMessage() == null
+                                        ? "流式面试落库失败"
+                                        : e.getMessage());
+                            }
+                        }
+
+                        @Override
+                        public void onError(String message) {
+                            sendSseError(emitter, message == null ? "AI流式面试失败" : message);
+                        }
+                    }
+            );
+        } catch (Exception e) {
+            sendSseError(emitter, e.getMessage() == null ? "流式面试失败" : e.getMessage());
+        }
+    }
+
+    /**
+     * MySQL 只在 AI 结果完整后保存一次 USER + AI 消息，并刷新 Redis TTL。
+     */
+    private PersistedAnswer persistAnswerResult(
+            Interview interview,
+            Resume resume,
+            HistoryBundle historyBundle,
+            List<InterviewMessage> history,
+            String userAnswer,
+            InterviewAnswerAiResult aiResult) {
+
         InterviewMessage userMessage =
-                interviewMessageService.save(interview.getId(), "USER", answer.trim());
+                interviewMessageService.save(interview.getId(), "USER", userAnswer);
 
         String evaluation = aiResult.getEvaluation() == null
                 ? ""
@@ -230,7 +348,6 @@ public class InterviewServiceImpl implements InterviewService {
             shouldContinue = false;
         }
 
-        // 更新 Redis 会话并刷新 TTL
         InterviewSession session = historyBundle.session().orElseGet(
                 () -> newSession(interview, resume)
         );
@@ -249,12 +366,18 @@ public class InterviewServiceImpl implements InterviewService {
         }
         interviewSessionService.save(session);
 
-        return new InterviewAnswerVO(
-                interviewMapper.selectById(id),
-                evaluation,
-                nextQuestionMessage,
-                shouldContinue
-        );
+        return new PersistedAnswer(evaluation, nextQuestionMessage, shouldContinue);
+    }
+
+    private void sendSseError(SseEmitter emitter, String message) {
+        try {
+            emitter.send(SseEmitter.event()
+                    .name("error")
+                    .data(Map.of("message", message == null ? "未知错误" : message)));
+            emitter.complete();
+        } catch (Exception ignored) {
+            emitter.completeWithError(new RuntimeException(message));
+        }
     }
 
     @Override
@@ -476,6 +599,13 @@ public class InterviewServiceImpl implements InterviewService {
             List<InterviewMessage> messages,
             String resumeContent,
             Optional<InterviewSession> session
+    ) {
+    }
+
+    private record PersistedAnswer(
+            String evaluation,
+            InterviewMessage aiMessage,
+            boolean shouldContinue
     ) {
     }
 }

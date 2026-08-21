@@ -19,6 +19,18 @@ public interface AiInterviewService {
             String userAnswer
     );
 
+    /**
+     * 调用 Python SSE 流式点评接口，通过 handler 回调 delta / done / error。
+     */
+    void answerStream(
+            String resumeContent,
+            String position,
+            List<InterviewMessage> history,
+            String currentQuestion,
+            String userAnswer,
+            InterviewAnswerStreamHandler handler
+    );
+
     InterviewReportAiResult report(
             String resumeContent,
             String position,
