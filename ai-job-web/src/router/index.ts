@@ -44,6 +44,21 @@ const router = createRouter({
           name: 'job-match-history',
           component: () => import('@/views/JobMatchHistory.vue'),
         },
+        {
+          path: 'interviews',
+          name: 'interviews',
+          component: () => import('@/views/InterviewList.vue'),
+        },
+        {
+          path: 'interviews/:id/report',
+          name: 'interview-report',
+          component: () => import('@/views/InterviewReport.vue'),
+        },
+        {
+          path: 'interviews/:id',
+          name: 'interview-room',
+          component: () => import('@/views/InterviewRoom.vue'),
+        },
       ],
     },
   ],

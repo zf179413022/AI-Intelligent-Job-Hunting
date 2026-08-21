@@ -29,6 +29,10 @@
           <el-icon><Suitcase /></el-icon>
           <span>岗位匹配</span>
         </el-menu-item>
+        <el-menu-item index="/interviews">
+          <el-icon><ChatDotRound /></el-icon>
+          <span>AI模拟面试</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -65,6 +69,7 @@ const collapsed = ref(false)
 const activeMenu = computed(() => {
   if (route.path.startsWith('/resumes')) return '/resumes'
   if (route.path.startsWith('/job-match')) return '/job-match'
+  if (route.path.startsWith('/interviews')) return '/interviews'
   return route.path
 })
 
@@ -75,6 +80,11 @@ const pageTitle = computed(() => {
   if (route.path.startsWith('/resumes')) return '我的简历'
   if (route.path.startsWith('/job-match/history')) return '匹配历史'
   if (route.path.startsWith('/job-match')) return 'AI 岗位匹配'
+  if (route.path.endsWith('/report') && route.path.includes('/interviews/')) {
+    return '面试报告'
+  }
+  if (route.path.match(/\/interviews\/\d+/)) return '面试进行中'
+  if (route.path.startsWith('/interviews')) return 'AI 模拟面试'
   return '首页'
 })
 
