@@ -35,54 +35,106 @@ AI Job Platform
 
 ## 系统架构
 
-### 总体架构（Java 为主）
+> **技术路线：** Java（Spring Boot + MySQL + Redis + LangChain4j + Chroma）是主线；Python FastAPI 只是简历分析 / 岗位匹配 / 面试对话的辅助 AI 服务。**不是** Python 主导、Java 只做转发。
 
-```text
-                     Vue3 + TypeScript
-                            │
-                         JWT / API
-                            │
-                   ┌────────▼────────┐
-                   │   Spring Boot   │
-                   │ Auth / Business │
-                   │ Resume / Job    │
-                   │ Interview       │
-                   │ Knowledge RAG   │
-                   └───┬─────────┬───┘
-                       │         │
-                    MySQL      Redis
-                       │
-               ┌───────▼────────┐
-               │   RAG Module   │
-               │  LangChain4j   │
-               └───────┬────────┘
-                       │
-            ┌──────────┼──────────┐
-            │          │          │
-       Embedding     Chroma    DeepSeek
-            │          │          │
-            └──────────┴──────────┘
-                       │
-                  RAG Answer
-                       │
-                   SSE Stream
-                       │
-                      Vue
+### 图 1 · 总体架构
+
+```mermaid
+flowchart TB
+  vue["Vue3 前端"]
+  sb["Spring Boot 核心业务"]
+
+  mysql[("MySQL<br/>用户/简历/匹配<br/>知识库元数据/问答")]
+  redis[("Redis<br/>面试 Session<br/>TTL 7200s")]
+  py["Python FastAPI<br/>简历分析 / 岗位匹配 / 面试"]
+  dsPy["DeepSeek"]
+
+  rag["LangChain4j RAG<br/>Chunk · Embedding · Retriever · Prompt"]
+  chroma[("Chroma Vector DB")]
+  dsRag["DeepSeek"]
+  sse["SSE 流式回答"]
+
+  vue -->|"JWT / HTTP"| sb
+  sb --> mysql
+  sb --> redis
+  sb --> py
+  py --> dsPy
+  sb --> rag
+  rag --> chroma
+  rag --> dsRag
+  dsRag --> sse
+  sse --> vue
 ```
 
-### Python 边界（面试 / 分析侧车）
+**分层职责**
+
+| 组件 | 职责 |
+|------|------|
+| Vue3 | 登录、简历、匹配、面试、知识库文档 / RAG 问答 UI |
+| Spring Boot | JWT 鉴权、业务编排、资源归属校验（越权 → 403）、RAG 主链路 |
+| MySQL | 用户 / 简历 / 匹配 / 面试 / 知识库文档与 Chunk / QA 记录 |
+| Redis | AI 面试临时 Session（TTL 7200s，可降级 MySQL） |
+| Python FastAPI | 仅 DeepSeek 调用侧车：简历分析、岗位匹配、面试流式问答 |
+| LangChain4j + Chroma | **Java 内**完成 Chunk / Embedding / Top-K / Prompt / Sources / SSE |
 
 ```text
-Spring Boot
-     │
-     └── Python FastAPI（:8001）
-              │
-           DeepSeek
-              │
-     简历分析 / 岗位匹配 / 面试 SSE
+                         Vue3 前端
+                            │
+                         JWT/HTTP
+                            ↓
+                  ┌──────────────────┐
+                  │  Spring Boot     │
+                  │  核心业务服务     │
+                  └────────┬─────────┘
+                           │
+          ┌────────────────┼────────────────┐
+          ↓                ↓                ↓
+       MySQL             Redis          Python AI
+   用户/简历/匹配      面试Session       FastAPI
+   知识库元数据/问答                      DeepSeek
+          │
+          │ Knowledge RAG（同进程）
+          ↓
+   LangChain4j → Chroma → DeepSeek → SSE → Vue
 ```
 
-RAG（文档解析、切分、Embedding、向量库、问答）全部在 **Java + LangChain4j** 内完成。
+### 图 2 · RAG 详细流程（上传入库 + 问答）
+
+```mermaid
+flowchart TB
+  subgraph ingest [Ingest]
+    upload[Upload_PDF_or_MD]
+    parse[PDFBox_or_MdTextExtractor]
+    parsed[Status_PARSED]
+    chunk[KnowledgeTextChunker]
+    embed[AllMiniLmL6V2_Embedding]
+    store[Chroma_upsert_chunk_id]
+    ready[Status_READY]
+    upload --> parse --> parsed --> chunk --> embed --> store --> ready
+  end
+
+  subgraph askFlow [Ask]
+    q[User_Question]
+    topk[TopK_by_userId]
+    mysqlChunk[Load_Chunk_Text_MySQL]
+    ctx[Build_Context]
+    prompt[RAG_Prompt]
+    llm[DeepSeek_Chat_or_Stream]
+    sources[Sources_score_chunkId]
+    out[Answer_plus_SSE]
+    q --> topk --> mysqlChunk --> ctx --> prompt --> llm --> sources --> out
+  end
+
+  ready -.-> topk
+```
+
+**入库：** PDF/MD → 解析 → Chunk（~700 / overlap ~100）→ 本地 Embedding（384d）→ Chroma（`chunk-{chunkId}`，metadata 含 `user_id` / `document_id`）→ `READY`
+
+**问答：** Question → Top-K（用户隔离）→ MySQL 取全文 → Context → DeepSeek → Answer + Sources；流式走 `StreamingChatModel` + SSE（`meta` / `delta` / `done` / `error`）
+
+Markdown 清洗：保留标题文字与代码正文；去掉 YAML frontmatter、链接/图片 URL、代码围栏与语言标记；MD 的 `pageCount` 为 `null`。
+
+更完整的可打印版（含简历口述要点）见 [`docs/architecture.md`](docs/architecture.md)。
 
 ---
 
@@ -96,29 +148,6 @@ RAG（文档解析、切分、Embedding、向量库、问答）全部在 **Java 
 | AI 面试 | 多轮问答、会话缓存、流式输出、报告 | Redis TTL 7200s、SSE、MySQL |
 | 知识库 RAG | PDF/MD 上传→解析→切分→向量入库→问答 | LangChain4j、Chroma、Sources、SSE |
 | 权限 | 资源级隔离；越权统一 **HTTP 403** | ForbiddenException |
-
-### RAG Pipeline
-
-```text
-PDF / Markdown
-      ↓
-PDFBox / MdTextExtractor
-      ↓
-Chunk（~700 字 / overlap ~100）
-      ↓
-本地 Embedding（384 维）
-      ↓
-Chroma（按 user_id + document_id）
-      ↓
-Top-K 检索 → Context
-      ↓
-DeepSeek（同步 ask / SSE stream）
-      ↓
-Answer + Sources
-```
-
-Markdown 清洗原则：保留标题文字与代码正文；去掉 YAML frontmatter、链接/图片 URL、代码围栏与语言标记；`pageCount` 对 MD 为 `null`。
-
 ---
 
 ## 技术栈
