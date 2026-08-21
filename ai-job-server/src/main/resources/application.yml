@@ -8,6 +8,12 @@ spring:
     password: ${MYSQL_PASSWORD:root}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2000ms
+
   servlet:
     multipart:
       max-file-size: 10MB
@@ -26,3 +32,8 @@ jwt:
 
 file:
   upload-path: uploads/resumes
+
+interview:
+  redis:
+    # 面试临时会话 TTL（秒），answer 时刷新
+    session-ttl-seconds: 7200

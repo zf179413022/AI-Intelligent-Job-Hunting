@@ -1,5 +1,6 @@
 package com.aijob.server.service.impl;
 
+import com.aijob.server.dto.InterviewSession;
 import com.aijob.server.entity.Interview;
 import com.aijob.server.entity.InterviewMessage;
 import com.aijob.server.entity.InterviewReport;
@@ -12,6 +13,7 @@ import com.aijob.server.mapper.InterviewReportMapper;
 import com.aijob.server.service.AiInterviewService;
 import com.aijob.server.service.InterviewMessageService;
 import com.aijob.server.service.InterviewService;
+import com.aijob.server.service.InterviewSessionService;
 import com.aijob.server.service.ResumeService;
 import com.aijob.server.vo.InterviewAnswerVO;
 import com.aijob.server.vo.InterviewStartVO;
@@ -19,13 +21,17 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class InterviewServiceImpl implements InterviewService {
@@ -33,6 +39,7 @@ public class InterviewServiceImpl implements InterviewService {
     private final InterviewMapper interviewMapper;
     private final InterviewReportMapper interviewReportMapper;
     private final InterviewMessageService interviewMessageService;
+    private final InterviewSessionService interviewSessionService;
     private final ResumeService resumeService;
     private final AiInterviewService aiInterviewService;
     private final ObjectMapper objectMapper;
@@ -142,11 +149,17 @@ public class InterviewServiceImpl implements InterviewService {
         interview.setStartTime(LocalDateTime.now());
         interviewMapper.updateById(interview);
 
+        String question = aiResult.getQuestion().trim();
         InterviewMessage questionMessage = interviewMessageService.save(
                 interview.getId(),
                 "AI",
-                aiResult.getQuestion().trim()
+                question
         );
+
+        InterviewSession session = newSession(interview, resume);
+        session.setStatus("RUNNING");
+        session.getMessages().add(new InterviewSession.SessionMessage("AI", question));
+        interviewSessionService.save(session);
 
         return new InterviewStartVO(interviewMapper.selectById(id), questionMessage);
     }
@@ -165,8 +178,8 @@ public class InterviewServiceImpl implements InterviewService {
         }
 
         Resume resume = requireParsedResume(interview);
-        List<InterviewMessage> history =
-                interviewMessageService.listByInterviewId(interview.getId());
+        HistoryBundle historyBundle = loadHistoryForAi(interview, resume);
+        List<InterviewMessage> history = historyBundle.messages();
 
         String currentQuestion = findLatestAiQuestion(history);
         if (currentQuestion == null) {
@@ -174,7 +187,7 @@ public class InterviewServiceImpl implements InterviewService {
         }
 
         InterviewAnswerAiResult aiResult = aiInterviewService.answer(
-                resume.getContent(),
+                historyBundle.resumeContent(),
                 interview.getPosition(),
                 history,
                 currentQuestion,
@@ -185,7 +198,8 @@ public class InterviewServiceImpl implements InterviewService {
             throw new RuntimeException("AI面试回答分析失败");
         }
 
-        interviewMessageService.save(interview.getId(), "USER", answer.trim());
+        InterviewMessage userMessage =
+                interviewMessageService.save(interview.getId(), "USER", answer.trim());
 
         String evaluation = aiResult.getEvaluation() == null
                 ? ""
@@ -196,23 +210,44 @@ public class InterviewServiceImpl implements InterviewService {
                 : aiResult.getNextQuestion().trim();
 
         InterviewMessage nextQuestionMessage = null;
+        String aiPersistContent = null;
         if (shouldContinue && !nextQuestion.isBlank()) {
-            String aiContent = evaluation.isBlank()
+            aiPersistContent = evaluation.isBlank()
                     ? nextQuestion
                     : "【点评】" + evaluation + "\n\n【追问】" + nextQuestion;
             nextQuestionMessage = interviewMessageService.save(
                     interview.getId(),
                     "AI",
-                    aiContent
+                    aiPersistContent
             );
         } else if (!evaluation.isBlank()) {
+            aiPersistContent = "【点评】" + evaluation + "\n\n本轮面试问题已足够，可以结束并生成报告。";
             nextQuestionMessage = interviewMessageService.save(
                     interview.getId(),
                     "AI",
-                    "【点评】" + evaluation + "\n\n本轮面试问题已足够，可以结束并生成报告。"
+                    aiPersistContent
             );
             shouldContinue = false;
         }
+
+        // 更新 Redis 会话并刷新 TTL
+        InterviewSession session = historyBundle.session().orElseGet(
+                () -> newSession(interview, resume)
+        );
+        session.setStatus("RUNNING");
+        session.setResumeContent(historyBundle.resumeContent());
+        if (session.getMessages() == null || session.getMessages().isEmpty()) {
+            session.setMessages(toSessionMessages(history));
+        }
+        session.getMessages().add(
+                new InterviewSession.SessionMessage("USER", userMessage.getContent())
+        );
+        if (aiPersistContent != null) {
+            session.getMessages().add(
+                    new InterviewSession.SessionMessage("AI", aiPersistContent)
+            );
+        }
+        interviewSessionService.save(session);
 
         return new InterviewAnswerVO(
                 interviewMapper.selectById(id),
@@ -232,15 +267,15 @@ public class InterviewServiceImpl implements InterviewService {
         }
 
         Resume resume = requireParsedResume(interview);
-        List<InterviewMessage> history =
-                interviewMessageService.listByInterviewId(interview.getId());
+        HistoryBundle historyBundle = loadHistoryForAi(interview, resume);
+        List<InterviewMessage> history = historyBundle.messages();
 
         if (history.isEmpty()) {
             throw new RuntimeException("尚无面试对话，无法生成报告");
         }
 
         InterviewReportAiResult aiResult = aiInterviewService.report(
-                resume.getContent(),
+                historyBundle.resumeContent(),
                 interview.getPosition(),
                 history
         );
@@ -281,6 +316,9 @@ public class InterviewServiceImpl implements InterviewService {
         interview.setScore(totalScore);
         interviewMapper.updateById(interview);
 
+        // 结束后面试临时会话从 Redis 删除
+        interviewSessionService.delete(interview.getId());
+
         return interviewReportMapper.selectOne(
                 new LambdaQueryWrapper<InterviewReport>()
                         .eq(InterviewReport::getInterviewId, interview.getId())
@@ -300,6 +338,79 @@ public class InterviewServiceImpl implements InterviewService {
         );
 
         interviewMapper.deleteById(interview.getId());
+        interviewSessionService.delete(interview.getId());
+    }
+
+    /**
+     * 优先 Redis 会话上下文；不可用或未命中时回退 MySQL，并可回填 Redis。
+     */
+    private HistoryBundle loadHistoryForAi(Interview interview, Resume resume) {
+        Optional<InterviewSession> cached = interviewSessionService.get(interview.getId());
+        if (cached.isPresent()
+                && cached.get().getMessages() != null
+                && !cached.get().getMessages().isEmpty()) {
+            InterviewSession session = cached.get();
+            String resumeContent = session.getResumeContent();
+            if (resumeContent == null || resumeContent.isBlank()) {
+                resumeContent = resume.getContent();
+                session.setResumeContent(resumeContent);
+            }
+            log.debug("面试上下文来自 Redis, interviewId={}", interview.getId());
+            return new HistoryBundle(toInterviewMessages(session), resumeContent, cached);
+        }
+
+        log.debug("面试上下文回退 MySQL, interviewId={}", interview.getId());
+        List<InterviewMessage> fromDb =
+                interviewMessageService.listByInterviewId(interview.getId());
+
+        InterviewSession session = newSession(interview, resume);
+        session.setStatus(interview.getStatus());
+        session.setMessages(toSessionMessages(fromDb));
+        interviewSessionService.save(session);
+
+        return new HistoryBundle(fromDb, resume.getContent(), Optional.of(session));
+    }
+
+    private InterviewSession newSession(Interview interview, Resume resume) {
+        InterviewSession session = new InterviewSession();
+        session.setInterviewId(interview.getId());
+        session.setUserId(interview.getUserId());
+        session.setResumeId(interview.getResumeId());
+        session.setPosition(interview.getPosition());
+        session.setResumeContent(resume.getContent());
+        session.setStatus(interview.getStatus());
+        session.setMessages(new ArrayList<>());
+        return session;
+    }
+
+    private List<InterviewMessage> toInterviewMessages(InterviewSession session) {
+        List<InterviewMessage> list = new ArrayList<>();
+        if (session.getMessages() == null) {
+            return list;
+        }
+        for (InterviewSession.SessionMessage item : session.getMessages()) {
+            InterviewMessage message = new InterviewMessage();
+            message.setInterviewId(session.getInterviewId());
+            message.setRole(item.getRole());
+            message.setContent(item.getContent());
+            list.add(message);
+        }
+        return list;
+    }
+
+    private List<InterviewSession.SessionMessage> toSessionMessages(
+            List<InterviewMessage> messages) {
+        List<InterviewSession.SessionMessage> list = new ArrayList<>();
+        if (messages == null) {
+            return list;
+        }
+        for (InterviewMessage message : messages) {
+            list.add(new InterviewSession.SessionMessage(
+                    message.getRole(),
+                    message.getContent()
+            ));
+        }
+        return list;
     }
 
     private Resume requireParsedResume(Interview interview) {
@@ -359,5 +470,12 @@ public class InterviewServiceImpl implements InterviewService {
         } catch (JsonProcessingException e) {
             throw new RuntimeException("序列化面试报告失败", e);
         }
+    }
+
+    private record HistoryBundle(
+            List<InterviewMessage> messages,
+            String resumeContent,
+            Optional<InterviewSession> session
+    ) {
     }
 }
