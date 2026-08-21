@@ -68,3 +68,5 @@ knowledge-pack/
 *.bak
 .cursor/
 skills-lock.json
+**/e2e_final_report.txt
+**/_e2e_*_report.txt
