@@ -16,8 +16,8 @@ spring:
 
   servlet:
     multipart:
-      max-file-size: 10MB
-      max-request-size: 10MB
+      max-file-size: 20MB
+      max-request-size: 20MB
 
   mvc:
     async:
@@ -36,6 +36,7 @@ jwt:
 
 file:
   upload-path: uploads/resumes
+  knowledge-upload-path: uploads/knowledge
 
 interview:
   redis:

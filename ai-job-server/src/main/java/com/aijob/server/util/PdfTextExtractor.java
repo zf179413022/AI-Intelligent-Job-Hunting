@@ -13,17 +13,23 @@ public class PdfTextExtractor {
     }
 
     public static String extract(Path filePath) {
+        return extractDetailed(filePath).text();
+    }
 
+    public static PdfExtractResult extractDetailed(Path filePath) {
         try (PDDocument document = Loader.loadPDF(filePath.toFile())) {
-
             PDFTextStripper stripper = new PDFTextStripper();
-
             String text = stripper.getText(document);
-
-            return text == null ? "" : text.trim();
-
+            int pageCount = document.getNumberOfPages();
+            return new PdfExtractResult(
+                    text == null ? "" : text.trim(),
+                    pageCount
+            );
         } catch (IOException e) {
             throw new RuntimeException("PDF文本提取失败", e);
         }
+    }
+
+    public record PdfExtractResult(String text, int pageCount) {
     }
 }

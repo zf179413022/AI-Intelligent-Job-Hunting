@@ -124,3 +124,38 @@ Authorization: Bearer {{token}}
 ### 21. 删除面试
 DELETE http://localhost:8080/api/interviews/1
 Authorization: Bearer {{token}}
+
+### ========== RAG 知识库 5.2 ==========
+
+### 22. 上传知识库 PDF（路径换成你的 PDF；上传后自动解析 → PARSED/FAILED）
+# @name knowledgeUpload
+POST http://localhost:8080/api/knowledge/documents
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=KnowledgeBoundary
+
+--KnowledgeBoundary
+Content-Disposition: form-data; name="file"; filename="java-interview.pdf"
+Content-Type: application/pdf
+
+< C:\Users\qqjer\Desktop\简历\简历 (1).pdf
+--KnowledgeBoundary--
+
+> {%
+    client.global.set("knowledgeDocId", response.body.id);
+%}
+
+### 23. 知识库文档列表
+GET http://localhost:8080/api/knowledge/documents
+Authorization: Bearer {{token}}
+
+### 24. 知识库文档详情
+GET http://localhost:8080/api/knowledge/documents/{{knowledgeDocId}}
+Authorization: Bearer {{token}}
+
+### 25. 重新解析（FAILED 时可重试）
+POST http://localhost:8080/api/knowledge/documents/{{knowledgeDocId}}/parse
+Authorization: Bearer {{token}}
+
+### 26. 删除知识库文档
+DELETE http://localhost:8080/api/knowledge/documents/{{knowledgeDocId}}
+Authorization: Bearer {{token}}
