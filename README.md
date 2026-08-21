@@ -167,11 +167,13 @@ Markdown 清洗：保留标题文字与代码正文；去掉 YAML frontmatter、
 
 ```text
 AI-Intelligent-Job-Hunting/
+├── docker-compose.yml       # MySQL + Redis + Chroma
+├── scripts/start-infra.cmd  # Windows 一键起基础设施
+├── docs/architecture.md     # 架构图说明
 ├── ai-job-web/              # Vue3 前端
 ├── ai-job-server/           # Spring Boot 主服务（含 RAG）
-│   ├── docker-compose.chroma.yml
-│   ├── scripts/             # Chroma 启动脚本
-│   ├── sql/                 # 建表脚本
+│   ├── docker-compose.chroma.yml  # 仅 Chroma（可选）
+│   ├── sql/                 # 建表脚本（Compose 首次自动导入）
 │   └── src/
 ├── ai-python-service/       # FastAPI（简历/匹配/面试）
 └── README.md
@@ -181,17 +183,31 @@ AI-Intelligent-Job-Hunting/
 
 ## 快速启动
 
-> 当前推荐：基础设施用 Docker 起 **Chroma**；MySQL / Redis 本机或自行容器化。完整 `docker compose`（MySQL+Redis+Chroma）见后续整理。
+> **基础设施（推荐）：** 仓库根目录 `docker compose up -d` 一次性启动 **MySQL + Redis + Chroma**。  
+> Spring Boot / Python / Vue 仍本机运行（降低全量容器化复杂度）。
 
 ### 0. 前置
 
 - JDK 21、Maven、Node.js 18+、Python 3.10+、Docker Desktop
-- 本机 MySQL（库名 `ai_job_platform`）、Redis（默认 `6379`）
 - DeepSeek API Key
+- 若本机已占用 `3306` / `6379` / `8000`，请先停止本机 MySQL / Redis / 旧 Chroma
 
-### 1. 初始化数据库
+### 1. 启动基础设施
 
-按顺序执行 `ai-job-server/sql/` 下脚本（用户、简历、岗位匹配、面试、知识库等）。
+```bash
+# 仓库根目录
+docker compose up -d
+docker compose ps
+# Windows 也可：scripts\start-infra.cmd
+```
+
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| MySQL | `127.0.0.1:3306` | 用户 `root` / 密码 `root`，库 `ai_job_platform`（首次自动执行 `ai-job-server/sql/*`） |
+| Redis | `127.0.0.1:6379` | AOF 持久化 |
+| Chroma | `http://127.0.0.1:8000` | 向量库（与 `application.yml` 默认一致） |
+
+仅需 Chroma 时仍可用：`ai-job-server/docker-compose.chroma.yml`。
 
 ### 2. 配置密钥
 
@@ -203,17 +219,7 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 
 Spring Boot 通过**同名环境变量**读取 `DEEPSEEK_API_KEY`（不要写进仓库配置文件）。
 
-### 3. 启动 Chroma
-
-```bash
-cd ai-job-server
-docker compose -f docker-compose.chroma.yml up -d
-# 或 Windows：scripts\start-chroma-docker.cmd
-```
-
-默认：`http://127.0.0.1:8000`
-
-### 4. 启动 Python AI 服务
+### 3. 启动 Python AI 服务
 
 ```bash
 cd ai-python-service
@@ -223,7 +229,7 @@ pip install -r requirements.txt
 uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 ```
 
-### 5. 启动 Spring Boot
+### 4. 启动 Spring Boot
 
 ```bash
 cd ai-job-server
@@ -232,9 +238,9 @@ mvn spring-boot:run
 # 或 java -jar target/ai-job-server-0.0.1-SNAPSHOT.jar
 ```
 
-默认：`http://127.0.0.1:8080`
+默认：`http://127.0.0.1:8080`（已对接 Compose 的 MySQL / Redis / Chroma）
 
-### 6. 启动前端
+### 5. 启动前端
 
 ```bash
 cd ai-job-web

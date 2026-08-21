@@ -1,9 +1,9 @@
-# RAG 5.5：Docker 部署 Chroma（解决 Windows 本机 ACCESS_VIOLATION）
-# 启动：docker compose -f docker-compose.chroma.yml up -d
-# 停止：docker compose -f docker-compose.chroma.yml down
-# 数据卷：ai-job-chroma-data（容器重启后向量仍在）
+# RAG 5.5 兼容入口：仅启动 Chroma
+# 推荐改用仓库根目录统一基础设施：
+#   docker compose up -d
+# （MySQL + Redis + Chroma）
 #
-# Spring Boot / LangChain4j：knowledge.chroma.base-url=http://127.0.0.1:8000
+# 本文件保留给「只要向量库」的场景。
 
 services:
   chroma:
