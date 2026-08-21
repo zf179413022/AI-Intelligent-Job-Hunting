@@ -159,7 +159,7 @@ Markdown 清洗：保留标题文字与代码正文；去掉 YAML frontmatter、
 | 数据 | MySQL、Redis |
 | AI（Java） | LangChain4j、DeepSeek（OpenAI 兼容）、本地 Embedding、Chroma |
 | AI（Python） | FastAPI、DeepSeek（简历 / 匹配 / 面试） |
-| 基础设施 | Docker（Chroma） |
+| 基础设施 | Docker Compose（MySQL + Redis + Chroma） |
 
 ---
 
@@ -263,6 +263,16 @@ npm run dev
 7. 用户 B 访问用户 A 资源 → **HTTP 403**
 
 建议验证问题（知识库已喂入 Java 后端面试向资料时）：HashMap、ConcurrentHashMap、JVM、Spring Boot、MySQL、Redis。
+
+### 最终 E2E 脚本（MD + RAG + SSE + 403）
+
+前置：Spring Boot `:8080`、Chroma `:8000`、DeepSeek Key 已配置。
+
+```bash
+python ai-job-server/scripts/e2e_final.py
+```
+
+验收点：上传 MD → PARSED → ingest READY → Top-K → sync ask（Sources + `qaId`）→ SSE（`meta`/`delta`/`done`）→ 用户 B 隔离 / `documentId` 越权 **403**。报告输出到 `ai-job-server/scripts/e2e_final_report.txt`。
 
 ---
 
