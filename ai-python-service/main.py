@@ -194,3 +194,245 @@ def match_job(req: JobMatchRequest):
             status_code=500,
             detail=f"AI岗位匹配失败：{str(e)}"
         )
+
+
+class InterviewStartRequest(BaseModel):
+    resumeContent: str
+    position: str
+
+
+class InterviewHistoryItem(BaseModel):
+    role: str
+    content: str
+
+
+class InterviewAnswerRequest(BaseModel):
+    resumeContent: str
+    position: str
+    history: list[InterviewHistoryItem] = []
+    currentQuestion: str
+    userAnswer: str
+
+
+class InterviewReportRequest(BaseModel):
+    resumeContent: str
+    position: str
+    history: list[InterviewHistoryItem] = []
+
+
+def _chat_json(system: str, user: str) -> dict:
+    try:
+        client = get_client()
+        response = client.chat.completions.create(
+            model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+        )
+        content = response.choices[0].message.content
+        return json.loads(content)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI面试调用失败：{str(e)}")
+
+
+def _format_history(history: list[InterviewHistoryItem]) -> str:
+    if not history:
+        return "（暂无历史对话）"
+    lines = []
+    for item in history:
+        role = (item.role or "").strip().upper()
+        label = "面试官" if role == "AI" else "候选人"
+        lines.append(f"{label}：{(item.content or '').strip()}")
+    return "\n".join(lines)
+
+
+@app.post("/api/ai/interview/start")
+def interview_start(req: InterviewStartRequest):
+    resume_content = (req.resumeContent or "").strip()
+    position = (req.position or "").strip()
+
+    if not resume_content:
+        raise HTTPException(status_code=400, detail="resumeContent 不能为空")
+    if not position:
+        raise HTTPException(status_code=400, detail="position 不能为空")
+
+    prompt = f"""你是一名严格但友好的 IT 技术面试官，正在面试「{position}」岗位候选人。
+
+根据候选人简历，生成第一道开场技术面试题。
+
+约束：
+1. 只能基于简历中明确出现的技术栈/项目出题，不得虚构简历没有的技能。
+2. 第一题适合开场：可结合自我介绍或简历中的核心技术（如 Java / Spring Boot / MySQL）。
+3. 只出一道题，问题清晰具体，便于口头回答。
+4. 只返回合法 JSON，不要 markdown。
+
+简历：
+{resume_content}
+
+返回：
+{{
+  "question": "第一道面试题"
+}}
+"""
+
+    result = _chat_json(
+        "你是专业的 IT 技术面试官。始终只返回合法 JSON，不要使用 markdown。",
+        prompt,
+    )
+    question = str(result.get("question") or "").strip()
+    if not question:
+        raise HTTPException(status_code=500, detail="AI未返回有效面试题")
+    return {"question": question}
+
+
+@app.post("/api/ai/interview/answer")
+def interview_answer(req: InterviewAnswerRequest):
+    resume_content = (req.resumeContent or "").strip()
+    position = (req.position or "").strip()
+    current_question = (req.currentQuestion or "").strip()
+    user_answer = (req.userAnswer or "").strip()
+
+    if not resume_content:
+        raise HTTPException(status_code=400, detail="resumeContent 不能为空")
+    if not position:
+        raise HTTPException(status_code=400, detail="position 不能为空")
+    if not current_question:
+        raise HTTPException(status_code=400, detail="currentQuestion 不能为空")
+    if not user_answer:
+        raise HTTPException(status_code=400, detail="userAnswer 不能为空")
+
+    history_text = _format_history(req.history or [])
+    user_rounds = sum(1 for h in (req.history or []) if (h.role or "").upper() == "USER")
+
+    prompt = f"""你是一名严格但友好的 IT 技术面试官，岗位：{position}。
+
+任务：
+1. 简要点评候选人刚刚的回答（指出正确点与不足，不要人身攻击）。
+2. 基于其回答进行有针对性的追问（追问要承接上一题，不要跳到无关话题）。
+3. 决定是否继续面试。
+
+规则：
+1. 不得虚构候选人没有的经历或技能。
+2. 追问应围绕 Java / Spring / MySQL / Redis 等与岗位相关的技术。
+3. 若回答很空泛、答非所问，可追问更基础的概念。
+4. 若已进行较多轮次（候选人已答约 5 轮及以上），或已覆盖足够维度，可将 shouldContinue 设为 false，nextQuestion 可为空字符串。
+5. 当前候选人历史回答轮次约：{user_rounds}
+6. 只返回合法 JSON，不要 markdown。
+
+简历摘要（供参考）：
+{resume_content[:3000]}
+
+历史对话：
+{history_text}
+
+当前问题：
+{current_question}
+
+候选人回答：
+{user_answer}
+
+返回：
+{{
+  "evaluation": "对本次回答的简短点评",
+  "nextQuestion": "下一道追问（若不继续可为空字符串）",
+  "shouldContinue": true
+}}
+"""
+
+    result = _chat_json(
+        "你是专业的 IT 技术面试官，擅长根据回答追问。始终只返回合法 JSON。",
+        prompt,
+    )
+
+    evaluation = str(result.get("evaluation") or "").strip()
+    next_question = str(result.get("nextQuestion") or "").strip()
+    should_continue = bool(result.get("shouldContinue", True))
+
+    if user_rounds >= 5:
+        should_continue = False
+
+    if not should_continue:
+        next_question = ""
+
+    if should_continue and not next_question:
+        raise HTTPException(status_code=500, detail="AI未返回下一题")
+
+    return {
+        "evaluation": evaluation or "已记录你的回答。",
+        "nextQuestion": next_question,
+        "shouldContinue": should_continue,
+    }
+
+
+@app.post("/api/ai/interview/report")
+def interview_report(req: InterviewReportRequest):
+    resume_content = (req.resumeContent or "").strip()
+    position = (req.position or "").strip()
+
+    if not resume_content:
+        raise HTTPException(status_code=400, detail="resumeContent 不能为空")
+    if not position:
+        raise HTTPException(status_code=400, detail="position 不能为空")
+
+    history_text = _format_history(req.history or [])
+
+    prompt = f"""你是一名资深 IT 技术面试官，请根据完整面试记录为「{position}」岗位生成结构化面试报告。
+
+约束：
+1. 只能依据面试对话与简历中明确信息评分，不得虚构表现。
+2. 分数均为 0-100 的整数。
+3. weakPoints / suggestions 为字符串数组。
+4. 只返回合法 JSON，不要 markdown。
+
+简历：
+{resume_content[:3000]}
+
+完整面试记录：
+{history_text}
+
+返回：
+{{
+  "totalScore": 78,
+  "javaScore": 80,
+  "mysqlScore": 75,
+  "redisScore": 70,
+  "springScore": 82,
+  "weakPoints": ["薄弱点1"],
+  "suggestions": ["建议1"],
+  "summary": "总体评价"
+}}
+"""
+
+    result = _chat_json(
+        "你是专业的 IT 面试官，负责生成结构化面试报告。始终只返回合法 JSON。",
+        prompt,
+    )
+
+    def _score(key: str) -> int:
+        try:
+            value = int(result.get(key, 0))
+        except (TypeError, ValueError):
+            value = 0
+        return max(0, min(100, value))
+
+    def _list(key: str) -> list:
+        value = result.get(key) or []
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    return {
+        "totalScore": _score("totalScore"),
+        "javaScore": _score("javaScore"),
+        "mysqlScore": _score("mysqlScore"),
+        "redisScore": _score("redisScore"),
+        "springScore": _score("springScore"),
+        "weakPoints": _list("weakPoints"),
+        "suggestions": _list("suggestions"),
+        "summary": str(result.get("summary") or "").strip(),
+    }

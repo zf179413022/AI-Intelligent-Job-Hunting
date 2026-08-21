@@ -77,3 +77,50 @@ Authorization: Bearer {{token}}
 ### 12. 删除岗位匹配记录
 DELETE http://localhost:8080/api/job-matches/1
 Authorization: Bearer {{token}}
+
+### 13. 创建模拟面试
+POST http://localhost:8080/api/interviews
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "resumeId": 3,
+  "position": "Java开发工程师"
+}
+
+### 14. 开始面试（AI 出第一题）
+POST http://localhost:8080/api/interviews/1/start
+Authorization: Bearer {{token}}
+
+### 15. 回答并追问（可多次）
+POST http://localhost:8080/api/interviews/1/answer
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "answer": "Spring Boot 通过自动配置减少了大量 XML 配置，启动时根据类路径条件装配 Bean。"
+}
+
+### 16. 结束面试并生成报告
+POST http://localhost:8080/api/interviews/1/finish
+Authorization: Bearer {{token}}
+
+### 17. 面试历史
+GET http://localhost:8080/api/interviews
+Authorization: Bearer {{token}}
+
+### 18. 面试详情
+GET http://localhost:8080/api/interviews/1
+Authorization: Bearer {{token}}
+
+### 19. 面试对话
+GET http://localhost:8080/api/interviews/1/messages
+Authorization: Bearer {{token}}
+
+### 20. 面试报告
+GET http://localhost:8080/api/interviews/1/report
+Authorization: Bearer {{token}}
+
+### 21. 删除面试
+DELETE http://localhost:8080/api/interviews/1
+Authorization: Bearer {{token}}
