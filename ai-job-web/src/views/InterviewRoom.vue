@@ -24,6 +24,7 @@
           v-if="interview?.status === 'RUNNING'"
           type="warning"
           :loading="finishing"
+          :disabled="answering"
           @click="onFinish"
         >
           结束并生成报告
@@ -38,6 +39,11 @@
       </div>
     </div>
 
+    <div v-if="currentQuestion && interview?.status === 'RUNNING'" class="page-card question-card">
+      <div class="q-label">当前题目</div>
+      <div class="q-text">{{ currentQuestion }}</div>
+    </div>
+
     <div class="page-card chat-card">
       <div ref="chatBox" class="chat-box">
         <div
@@ -46,13 +52,27 @@
           class="bubble"
           :class="msg.role === 'USER' ? 'mine' : 'ai'"
         >
-          <div class="role">{{ msg.role === 'USER' ? '我' : 'AI 面试官' }}</div>
-          <div class="content">{{ msg.content }}</div>
+          <div class="role">{{ roleTitle(msg) }}</div>
+          <div class="content">{{ displayContent(msg) }}</div>
         </div>
-        <el-empty v-if="!messages.length && !loading" description="暂无对话，请开始面试" />
+
+        <div v-if="streaming" class="bubble ai streaming">
+          <div class="role">AI 面试官</div>
+          <div class="content">
+            <template v-if="thinking && !streamText">
+              <span class="thinking">AI 正在思考</span>
+              <span class="dots">...</span>
+            </template>
+            <template v-else>
+              {{ streamText }}<span class="cursor">▍</span>
+            </template>
+          </div>
+        </div>
+
+        <el-empty v-if="!messages.length && !loading && !streaming" description="暂无对话，请开始面试" />
       </div>
 
-      <div v-if="lastEvaluation" class="eval-card">
+      <div v-if="lastEvaluation && !streaming" class="eval-card">
         <strong>本轮点评：</strong>
         {{ lastEvaluation }}
         <span v-if="shouldContinue === false" class="hint">（建议结束面试生成报告）</span>
@@ -69,8 +89,8 @@
           :disabled="answering"
         />
         <div class="composer-actions">
-          <el-button type="primary" :loading="answering" :disabled="!answer.trim()" @click="onAnswer">
-            {{ answering ? 'AI 分析中...' : '提交回答' }}
+          <el-button type="primary" :loading="answering" :disabled="!answer.trim() || answering" @click="onAnswer">
+            {{ answering ? 'AI 生成中...' : '提交回答' }}
           </el-button>
         </div>
       </div>
@@ -79,11 +99,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  answerInterview,
+  answerInterviewStream,
   finishInterview,
   getInterview,
   listInterviewMessages,
@@ -110,6 +130,41 @@ const answer = ref('')
 const lastEvaluation = ref('')
 const shouldContinue = ref<boolean | null>(null)
 const chatBox = ref<HTMLElement | null>(null)
+
+const streaming = ref(false)
+const thinking = ref(false)
+const streamText = ref('')
+let abortController: AbortController | null = null
+let tempUserMsgId: number | null = null
+
+const currentQuestion = computed(() => findLatestAiQuestion(messages.value))
+
+function roleTitle(msg: InterviewMessage) {
+  if (msg.role === 'USER') return '我的回答'
+  if (msg.content?.includes('【点评】')) return 'AI 点评 / 追问'
+  return 'AI 面试官'
+}
+
+function displayContent(msg: InterviewMessage) {
+  return msg.content || ''
+}
+
+function findLatestAiQuestion(list: InterviewMessage[]) {
+  for (let i = list.length - 1; i >= 0; i--) {
+    const msg = list[i]
+    if (msg.role?.toUpperCase() !== 'AI') continue
+    const content = msg.content || ''
+    const idx = content.lastIndexOf('【追问】')
+    if (idx >= 0) {
+      return content.slice(idx + '【追问】'.length).trim()
+    }
+    if (content.includes('【点评】') && content.includes('可以结束')) {
+      continue
+    }
+    return content.trim()
+  }
+  return ''
+}
 
 async function scrollBottom() {
   await nextTick()
@@ -154,24 +209,85 @@ async function onAnswer() {
     ElMessage.warning('请输入回答')
     return
   }
+  if (answering.value) return
 
   answering.value = true
-  try {
-    const result = await answerInterview(interviewId.value, text)
-    lastEvaluation.value = result.evaluation || ''
-    shouldContinue.value = result.shouldContinue
-    answer.value = ''
-    interview.value = result.interview
-    messages.value = await listInterviewMessages(interviewId.value)
-    await scrollBottom()
+  streaming.value = true
+  thinking.value = true
+  streamText.value = ''
+  lastEvaluation.value = ''
 
-    if (result.shouldContinue === false) {
-      ElMessage.info('本轮问题已足够，可以结束并生成报告')
+  tempUserMsgId = -Date.now()
+  messages.value = [
+    ...messages.value,
+    {
+      id: tempUserMsgId,
+      interviewId: interviewId.value,
+      role: 'USER',
+      content: text,
+    },
+  ]
+  answer.value = ''
+  await scrollBottom()
+
+  abortController?.abort()
+  abortController = new AbortController()
+
+  try {
+    await answerInterviewStream(
+      interviewId.value,
+      text,
+      {
+        onDelta: (chunk) => {
+          thinking.value = false
+          streamText.value += chunk
+          void scrollBottom()
+        },
+        onDone: async (result) => {
+          streaming.value = false
+          thinking.value = false
+          streamText.value = ''
+          tempUserMsgId = null
+
+          lastEvaluation.value = result.evaluation || ''
+          shouldContinue.value = result.shouldContinue
+          if (result.interview) {
+            interview.value = result.interview
+          }
+          messages.value = await listInterviewMessages(interviewId.value)
+          await scrollBottom()
+
+          if (result.shouldContinue === false) {
+            ElMessage.info('本轮问题已足够，可以结束并生成报告')
+          }
+        },
+        onError: async (message) => {
+          streaming.value = false
+          thinking.value = false
+          streamText.value = ''
+          if (tempUserMsgId != null) {
+            messages.value = messages.value.filter((m) => m.id !== tempUserMsgId)
+            tempUserMsgId = null
+          }
+          ElMessage.error(message || '流式面试失败')
+        },
+      },
+      abortController.signal,
+    )
+  } catch (e) {
+    streaming.value = false
+    thinking.value = false
+    streamText.value = ''
+    if (tempUserMsgId != null) {
+      messages.value = messages.value.filter((m) => m.id !== tempUserMsgId)
+      tempUserMsgId = null
     }
-  } catch {
-    // handled
+    if ((e as Error)?.name !== 'AbortError') {
+      ElMessage.error((e as Error)?.message || '流式请求失败')
+    }
   } finally {
     answering.value = false
+    abortController = null
   }
 }
 
@@ -198,11 +314,18 @@ onMounted(() => {
   void loadAll()
 })
 
+onBeforeUnmount(() => {
+  abortController?.abort()
+})
+
 watch(
   () => route.params.id,
   () => {
+    abortController?.abort()
     lastEvaluation.value = ''
     shouldContinue.value = null
+    streaming.value = false
+    streamText.value = ''
     void loadAll()
   },
 )
@@ -230,6 +353,24 @@ watch(
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.question-card {
+  margin-bottom: 16px;
+  border-left: 3px solid #409eff;
+}
+
+.q-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.q-text {
+  line-height: 1.7;
+  white-space: pre-wrap;
+  color: #303133;
+  font-weight: 500;
 }
 
 .chat-card {
@@ -266,10 +407,36 @@ watch(
   color: #fff;
 }
 
+.bubble.streaming {
+  border: 1px dashed #79bbff;
+}
+
 .role {
   font-size: 12px;
   opacity: 0.8;
   margin-bottom: 6px;
+}
+
+.thinking {
+  color: #909399;
+}
+
+.dots {
+  display: inline-block;
+  animation: blink 1.2s infinite;
+}
+
+.cursor {
+  display: inline-block;
+  margin-left: 1px;
+  color: #409eff;
+  animation: blink 0.9s step-end infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
 }
 
 .eval-card {
