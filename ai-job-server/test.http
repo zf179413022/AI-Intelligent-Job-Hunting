@@ -53,3 +53,27 @@ Authorization: Bearer {{token}}
 ### 8. 删除简历（把 id 改成真实 resumeId）
 DELETE http://localhost:8080/api/resumes/2
 Authorization: Bearer {{token}}
+
+### 9. AI 岗位匹配
+POST http://localhost:8080/api/job-matches
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "resumeId": 3,
+  "jobName": "Java开发工程师",
+  "companyName": "XX科技有限公司",
+  "jobDescription": "负责Java后端系统开发；熟悉Java、Spring Boot、MySQL、Redis；了解Spring Cloud；有良好的代码规范；有项目开发经验。优先考虑有微服务与中间件实践经验的候选人，能够独立完成需求分析、接口设计与联调。"
+}
+
+### 10. 岗位匹配历史
+GET http://localhost:8080/api/job-matches
+Authorization: Bearer {{token}}
+
+### 11. 岗位匹配详情（改成真实 id）
+GET http://localhost:8080/api/job-matches/1
+Authorization: Bearer {{token}}
+
+### 12. 删除岗位匹配记录
+DELETE http://localhost:8080/api/job-matches/1
+Authorization: Bearer {{token}}

@@ -25,7 +25,7 @@
           <el-icon><DataAnalysis /></el-icon>
           <span>AI简历分析</span>
         </el-menu-item>
-        <el-menu-item index="/jobs">
+        <el-menu-item index="/job-match">
           <el-icon><Suitcase /></el-icon>
           <span>岗位匹配</span>
         </el-menu-item>
@@ -64,6 +64,7 @@ const collapsed = ref(false)
 
 const activeMenu = computed(() => {
   if (route.path.startsWith('/resumes')) return '/resumes'
+  if (route.path.startsWith('/job-match')) return '/job-match'
   return route.path
 })
 
@@ -72,7 +73,8 @@ const pageTitle = computed(() => {
     return 'AI 简历分析'
   }
   if (route.path.startsWith('/resumes')) return '我的简历'
-  if (route.path.startsWith('/jobs')) return '岗位匹配'
+  if (route.path.startsWith('/job-match/history')) return '匹配历史'
+  if (route.path.startsWith('/job-match')) return 'AI 岗位匹配'
   return '首页'
 })
 

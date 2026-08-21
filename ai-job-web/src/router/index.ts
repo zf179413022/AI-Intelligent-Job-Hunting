@@ -32,8 +32,17 @@ const router = createRouter({
         },
         {
           path: 'jobs',
-          name: 'jobs',
+          redirect: '/job-match',
+        },
+        {
+          path: 'job-match',
+          name: 'job-match',
           component: () => import('@/views/JobMatch.vue'),
+        },
+        {
+          path: 'job-match/history',
+          name: 'job-match-history',
+          component: () => import('@/views/JobMatchHistory.vue'),
         },
       ],
     },
