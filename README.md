@@ -274,15 +274,9 @@ npm run dev
 
 ---
 
-## 设计取舍（面试可讲）
-
-- **RAG 放在 Java：** 与主业务同进程、同权限模型；Python 不继续扩张 AI 核心。
-- **本地 Embedding + Docker Chroma：** 避免 Windows 本机 Chroma 崩溃；向量持久化用 Docker Volume。
-- **幂等入库：** 按 `document_id` + `user_id` 先清 MySQL Chunk / Chroma 向量再写入。
-- **越权统一 403：** 简历、匹配、面试、知识库共用 `ForbiddenException`。
 
 ---
 
 ## License
 
-本仓库代码用于学习与求职作品展示。第三方知识资料（如 JavaGuide）请遵循其原仓库许可，勿直接提交进 Git。
+本仓库代码用于学习。第三方知识资料（如 JavaGuide）请遵循其原仓库许可，勿直接提交进 Git。
