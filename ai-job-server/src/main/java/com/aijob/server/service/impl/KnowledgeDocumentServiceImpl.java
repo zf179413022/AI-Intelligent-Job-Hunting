@@ -2,6 +2,7 @@ package com.aijob.server.service.impl;
 
 import com.aijob.server.entity.KnowledgeChunk;
 import com.aijob.server.entity.KnowledgeDocument;
+import com.aijob.server.exception.DuplicateResourceException;
 import com.aijob.server.exception.ForbiddenException;
 import com.aijob.server.mapper.KnowledgeChunkMapper;
 import com.aijob.server.mapper.KnowledgeDocumentMapper;
@@ -9,8 +10,10 @@ import com.aijob.server.service.KnowledgeDocumentService;
 import com.aijob.server.service.KnowledgeVectorStoreService;
 import com.aijob.server.util.DocumentExtractResult;
 import com.aijob.server.util.DocumentTextExtractor;
+import com.aijob.server.util.FileContentHasher;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -67,6 +70,16 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
             throw new RuntimeException("文件大小不能超过 20MB");
         }
 
+        byte[] content;
+        try {
+            content = file.getBytes();
+        } catch (IOException e) {
+            throw new RuntimeException("读取上传文件失败", e);
+        }
+
+        String contentHash = FileContentHasher.sha256Hex(content);
+        rejectIfDuplicate(userId, contentHash);
+
         String fileType = "pdf".equals(ext) ? "PDF" : "MD";
         String storedFileName = UUID.randomUUID() + "." + ext;
         Path target;
@@ -83,7 +96,7 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
                 throw new RuntimeException("非法文件路径");
             }
 
-            file.transferTo(target);
+            Files.write(target, content);
         } catch (IOException e) {
             throw new RuntimeException("知识库文件保存失败", e);
         }
@@ -101,11 +114,22 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
         document.setFilePath(target.toString());
         document.setFileType(fileType);
         document.setFileSize(file.getSize());
+        document.setContentHash(contentHash);
         document.setStatus("UPLOADED");
         document.setChunkCount(null);
         document.setErrorMessage(null);
 
-        knowledgeDocumentMapper.insert(document);
+        try {
+            knowledgeDocumentMapper.insert(document);
+        } catch (DuplicateKeyException e) {
+            try {
+                Files.deleteIfExists(target);
+            } catch (IOException ignored) {
+                // best-effort cleanup after concurrent duplicate insert
+            }
+            rejectIfDuplicate(userId, contentHash);
+            throw e;
+        }
 
         // 上传后立即尝试解析（不落全文到 knowledge_document）
         return parseInternal(document);
@@ -193,6 +217,21 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
             document.setErrorMessage(message);
             knowledgeDocumentMapper.updateById(document);
             return knowledgeDocumentMapper.selectById(document.getId());
+        }
+    }
+
+    private void rejectIfDuplicate(Long userId, String contentHash) {
+        KnowledgeDocument existing = knowledgeDocumentMapper.selectOne(
+                new LambdaQueryWrapper<KnowledgeDocument>()
+                        .eq(KnowledgeDocument::getUserId, userId)
+                        .eq(KnowledgeDocument::getContentHash, contentHash)
+                        .last("LIMIT 1")
+        );
+        if (existing != null) {
+            throw new DuplicateResourceException(
+                    "该文件已上传过，请勿重复上传。若需重新上传，请先删除已有文档",
+                    existing.getId()
+            );
         }
     }
 

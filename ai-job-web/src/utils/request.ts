@@ -48,6 +48,8 @@ request.interceptors.response.use(
       ElMessage.error('请求的资源不存在')
     } else if (status === 400) {
       ElMessage.error(typeof message === 'string' ? message : '请求参数错误')
+    } else if (status === 409) {
+      ElMessage.warning(typeof message === 'string' ? message : '资源已存在，请勿重复操作')
     } else if (status && status >= 500) {
       ElMessage.error(
         typeof message === 'string' ? message : '服务器错误，请稍后重试',

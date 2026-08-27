@@ -27,9 +27,17 @@ import { uploadKnowledgeDocument } from '@/api/knowledge'
 
 const emit = defineEmits<{
   success: []
+  duplicate: [documentId: number]
 }>()
 
 const loading = ref(false)
+
+function extractExistingDocumentId(error: unknown): number | null {
+  const data = (error as { response?: { data?: { existingDocumentId?: number } } })?.response
+    ?.data
+  const id = data?.existingDocumentId
+  return typeof id === 'number' && id > 0 ? id : null
+}
 
 function isAllowed(name: string) {
   const lower = name.toLowerCase()
@@ -50,8 +58,12 @@ async function onChange(uploadFile: UploadFile) {
     await uploadKnowledgeDocument(raw)
     ElMessage.success('上传成功，已自动解析')
     emit('success')
-  } catch {
-    // 拦截器已提示
+  } catch (error: unknown) {
+    const status = (error as { response?: { status?: number } })?.response?.status
+    const existingId = extractExistingDocumentId(error)
+    if (status === 409 && existingId != null) {
+      emit('duplicate', existingId)
+    }
   } finally {
     loading.value = false
   }
