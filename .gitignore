@@ -46,7 +46,27 @@ replay_pid*
 项目方案.md
 项目踩坑与简历素材.md
 
+# Python
+**/venv/
+**/__pycache__/
+*.pyc
+
+# Uploaded resumes (local files)
+**/uploads/
+
+# Chroma / local RAG runtime & smoke artifacts
+**/data/chroma/
+**/data/chromadb/
+ai-job-server/data/
+
+# Local knowledge corpora (JavaGuide 等第三方资料，勿入库)
+knowledge-pack/
+知识库存放/
+
 # Misc
 *.tmp
 *.bak
 .cursor/
+skills-lock.json
+**/e2e_final_report.txt
+**/_e2e_*_report.txt
