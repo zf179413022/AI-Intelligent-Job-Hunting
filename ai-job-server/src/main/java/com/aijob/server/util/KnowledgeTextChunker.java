@@ -22,6 +22,8 @@ public final class KnowledgeTextChunker {
     /** chunk 前保留的标题层级数；再长就只留最深层，避免标题挤占正文预算。 */
     private static final int MAX_HEADING_DEPTH = 3;
     private static final int MAX_PREFIX_CHARS = 60;
+    /** 表格/代码前不超过该长度的引言并入同一 chunk，避免产生低价值碎片。 */
+    private static final int INTRO_MERGE_MAX_CHARS = 200;
     /** 顶层声明是代码块的安全切点：从这里开始新段，避免把方法拦腰截断。 */
     private static final Pattern TOP_LEVEL_DECL = Pattern.compile(
             "^ {0,2}(public|private|protected|static|final|abstract|class|interface|enum|record"
@@ -124,12 +126,22 @@ public final class KnowledgeTextChunker {
 
             String prefix = headingPrefix(headings);
             if (block.isAtomic()) {
-                flush(current, chunks);
+                String intro = current.toString().trim();
+                current.setLength(0);
                 String body = DocumentTextRenderer.renderBlock(block);
-                if (body.length() + prefix.length() <= maxChars) {
-                    chunks.add(prefix + body);
+                int mergedLength = intro.length() + (intro.isEmpty() ? 0 : 1) + body.length();
+                if (!intro.isEmpty() && intro.length() <= INTRO_MERGE_MAX_CHARS && mergedLength <= maxChars) {
+                    // 短引言跟着表格/代码走，避免 72 字碎片挤占 top-k
+                    chunks.add(intro + "\n" + body);
                 } else {
-                    chunks.addAll(splitAtomic(block, prefix, maxChars));
+                    if (!intro.isEmpty()) {
+                        chunks.add(intro);
+                    }
+                    if (body.length() + prefix.length() <= maxChars) {
+                        chunks.add(prefix + body);
+                    } else {
+                        chunks.addAll(splitAtomic(block, prefix, maxChars));
+                    }
                 }
                 continue;
             }
