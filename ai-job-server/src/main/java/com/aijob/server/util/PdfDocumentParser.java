@@ -107,8 +107,10 @@ public final class PdfDocumentParser {
         private final List<DocumentBlock> blocks = new ArrayList<>();
         private final List<String> warnings = new ArrayList<>();
         private List<Row> pageRows = new ArrayList<>();
+        private List<Row> currentRows = new ArrayList<>();
         private int pageNo;
         private float pageHeight;
+        private float pageWidth = 595f;
         private float bodySize = 10f;
 
         LayoutStripper() throws IOException {
@@ -118,6 +120,7 @@ public final class PdfDocumentParser {
         protected void startPage(PDPage page) throws IOException {
             pageNo++;
             pageHeight = page.getCropBox().getHeight();
+            pageWidth = page.getCropBox().getWidth();
             pageRows.clear();
             super.startPage(page);
         }
@@ -166,9 +169,36 @@ public final class PdfDocumentParser {
             pageRows = mergeRowsByBaseline(pageRows);
             bodySize = medianSize(pageRows);
 
+            float splitX = detectColumnSplit();
+            if (Float.isNaN(splitX)) {
+                processRows(pageRows);
+                return;
+            }
+            // 双栏：先读完左栏再读右栏，避免左右栏被拼进同一行、也避免被误判成表格
+            List<Row> left = new ArrayList<>();
+            List<Row> right = new ArrayList<>();
+            for (Row row : pageRows) {
+                List<Glyph> leftGlyphs = new ArrayList<>();
+                List<Glyph> rightGlyphs = new ArrayList<>();
+                for (Glyph glyph : row.glyphs()) {
+                    (glyph.x() < splitX ? leftGlyphs : rightGlyphs).add(glyph);
+                }
+                if (!leftGlyphs.isEmpty()) {
+                    left.add(new Row(leftGlyphs));
+                }
+                if (!rightGlyphs.isEmpty()) {
+                    right.add(new Row(rightGlyphs));
+                }
+            }
+            processRows(left);
+            processRows(right);
+        }
+
+        private void processRows(List<Row> rows) {
+            currentRows = rows;
             int i = 0;
-            while (i < pageRows.size()) {
-                Row row = pageRows.get(i);
+            while (i < rows.size()) {
+                Row row = rows.get(i);
                 String text = row.text();
                 if (text.isBlank()) {
                     i++;
@@ -187,7 +217,7 @@ public final class PdfDocumentParser {
                     i++;
                     continue;
                 }
-                if (i + 1 < pageRows.size() && isTableRun(i)) {
+                if (i + 1 < rows.size() && isTableRun(i)) {
                     i = readTable(i);
                     continue;
                 }
@@ -200,11 +230,65 @@ public final class PdfDocumentParser {
             }
         }
 
+        /**
+         * 单栏文档偶尔有「标题 + 日期」这种大间隙行，但占比低；
+         * 双栏文档超过 60% 的行都在页面中部同一 x 处断开。两者据此区分。
+         */
+        private float detectColumnSplit() {
+            if (pageRows.size() < 6) {
+                return Float.NaN;
+            }
+            List<Float> gapXs = new ArrayList<>();
+            int rowsWithGap = 0;
+            for (Row row : pageRows) {
+                Glyph prev = null;
+                float maxGap = 0;
+                float atX = 0;
+                int gapCount = 0;
+                for (Glyph glyph : row.glyphs()) {
+                    if (prev != null) {
+                        float gap = glyph.x() - prev.endX();
+                        float threshold = Math.max(MIN_CELL_GAP, 2.5f * Math.max(prev.size(), glyph.size()));
+                        if (gap > threshold) {
+                            gapCount++;
+                            if (gap > maxGap) {
+                                maxGap = gap;
+                                atX = prev.endX();
+                            }
+                        }
+                    }
+                    prev = glyph;
+                }
+                if (gapCount > 0) {
+                    rowsWithGap++;
+                    if (gapCount <= 2) {
+                        gapXs.add(atX);
+                    }
+                }
+            }
+            if (rowsWithGap < pageRows.size() * 0.6f || gapXs.size() < pageRows.size() * 0.5f) {
+                return Float.NaN;
+            }
+            double mean = gapXs.stream().mapToDouble(Float::doubleValue).average().orElse(0);
+            double variance = gapXs.stream()
+                    .mapToDouble(x -> (x - mean) * (x - mean))
+                    .average()
+                    .orElse(0);
+            if (Math.sqrt(variance) > pageWidth * 0.06) {
+                return Float.NaN;
+            }
+            // 中缝落在页面中部才像分栏；表格的列间隙通常落在 25% 一带，会被排除
+            if (mean < pageWidth * 0.35 || mean > pageWidth * 0.65) {
+                return Float.NaN;
+            }
+            return (float) mean;
+        }
+
         private int readCode(int start) {
             int i = start;
             List<String> body = new ArrayList<>();
-            while (i < pageRows.size() && pageRows.get(i).mono()) {
-                String line = pageRows.get(i).text();
+            while (i < currentRows.size() && currentRows.get(i).mono()) {
+                String line = currentRows.get(i).text();
                 if (!line.isBlank()) {
                     body.add(line);
                 }
@@ -217,11 +301,11 @@ public final class PdfDocumentParser {
         }
 
         private int readTable(int start) {
-            int cols = cells(pageRows.get(start)).size();
+            int cols = cells(currentRows.get(start)).size();
             List<Row> rows = new ArrayList<>();
             int i = start;
-            while (i < pageRows.size()) {
-                Row row = pageRows.get(i);
+            while (i < currentRows.size()) {
+                Row row = currentRows.get(i);
                 if (!isTableRow(row) || cells(row).size() != cols) {
                     break;
                 }
@@ -257,8 +341,8 @@ public final class PdfDocumentParser {
             StringBuilder text = new StringBuilder();
             int i = start;
             float previousY = Float.NaN;
-            while (i < pageRows.size()) {
-                Row row = pageRows.get(i);
+            while (i < currentRows.size()) {
+                Row row = currentRows.get(i);
                 String line = row.text();
                 if (line.isBlank() || row.mono() || isFootnote(row, line) || isPageNumber(row, line)) {
                     break;
@@ -304,13 +388,13 @@ public final class PdfDocumentParser {
         }
 
         private boolean isTableRun(int start) {
-            if (!isTableRow(pageRows.get(start))) {
+            if (!isTableRow(currentRows.get(start))) {
                 return false;
             }
-            int cols = cells(pageRows.get(start)).size();
-            return start + 1 < pageRows.size()
-                    && isTableRow(pageRows.get(start + 1))
-                    && cells(pageRows.get(start + 1)).size() == cols;
+            int cols = cells(currentRows.get(start)).size();
+            return start + 1 < currentRows.size()
+                    && isTableRow(currentRows.get(start + 1))
+                    && cells(currentRows.get(start + 1)).size() == cols;
         }
 
         private boolean isTableRow(Row row) {

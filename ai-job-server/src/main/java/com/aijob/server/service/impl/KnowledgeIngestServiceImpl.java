@@ -11,6 +11,7 @@ import com.aijob.server.service.KnowledgeVectorStoreService;
 import com.aijob.server.util.DocumentExtractResult;
 import com.aijob.server.util.DocumentTextExtractor;
 import com.aijob.server.util.KnowledgeTextChunker;
+import com.aijob.server.util.TokenEstimator;
 import com.aijob.server.vo.KnowledgeIngestVO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import dev.langchain4j.data.embedding.Embedding;
@@ -95,7 +96,7 @@ public class KnowledgeIngestServiceImpl implements KnowledgeIngestService {
             chunk.setUserId(userId);
             chunk.setChunkIndex(index++);
             chunk.setContent(part);
-            chunk.setTokenEstimate(part.length());
+            chunk.setTokenEstimate(TokenEstimator.estimate(part));
             chunk.setVectorId(null);
             knowledgeChunkMapper.insert(chunk);
             saved.add(chunk);
