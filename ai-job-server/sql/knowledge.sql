@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS knowledge_document (
     file_path VARCHAR(500) NOT NULL COMMENT '本地路径，如 uploads/knowledge/{userId}/xxx.pdf',
     file_type VARCHAR(20) NOT NULL DEFAULT 'PDF' COMMENT '首版仅 PDF',
     file_size BIGINT DEFAULT NULL COMMENT '文件大小（字节）',
+    content_hash CHAR(64) DEFAULT NULL COMMENT '文件内容 SHA-256（hex），用于同用户去重',
 
     status VARCHAR(20) NOT NULL DEFAULT 'UPLOADED' COMMENT 'UPLOADED/PARSED/CHUNKED/EMBEDDED/READY/FAILED',
     page_count INT DEFAULT NULL COMMENT '页数（可选）',
@@ -28,7 +29,8 @@ CREATE TABLE IF NOT EXISTS knowledge_document (
 
     INDEX idx_user_id (user_id),
     INDEX idx_user_status (user_id, status),
-    INDEX idx_user_created (user_id, created_at)
+    INDEX idx_user_created (user_id, created_at),
+    UNIQUE KEY uk_user_content_hash (user_id, content_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='RAG知识库文档';
 
 

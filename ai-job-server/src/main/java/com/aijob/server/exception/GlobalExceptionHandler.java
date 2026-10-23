@@ -23,6 +23,19 @@ public class GlobalExceptionHandler {
         return body(HttpStatus.FORBIDDEN, ex.getMessage() == null ? "无权访问该资源" : ex.getMessage());
     }
 
+    @ExceptionHandler(DuplicateResourceException.class)
+    public ResponseEntity<Map<String, Object>> handleDuplicate(DuplicateResourceException ex) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("timestamp", Instant.now().toString());
+        payload.put("status", HttpStatus.CONFLICT.value());
+        payload.put("error", HttpStatus.CONFLICT.getReasonPhrase());
+        payload.put("message", ex.getMessage() == null ? "资源已存在" : ex.getMessage());
+        if (ex.getExistingDocumentId() != null) {
+            payload.put("existingDocumentId", ex.getExistingDocumentId());
+        }
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(payload);
+    }
+
     @ExceptionHandler({MethodArgumentNotValidException.class, BindException.class})
     public ResponseEntity<Map<String, Object>> handleValidation(Exception ex) {
         String message;

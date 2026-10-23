@@ -12,7 +12,13 @@
     </div>
 
     <div class="page-card">
-      <el-table v-loading="loading" :data="documents" stripe empty-text="暂无知识库文档，请先上传 PDF 或 Markdown">
+      <el-table
+        v-loading="loading"
+        :data="documents"
+        stripe
+        empty-text="暂无知识库文档，请先上传 PDF 或 Markdown"
+        :row-class-name="rowClassName"
+      >
         <el-table-column prop="title" label="标题" min-width="160" show-overflow-tooltip />
         <el-table-column prop="fileName" label="文件名" min-width="180" show-overflow-tooltip />
         <el-table-column prop="fileType" label="类型" width="80" />
@@ -90,7 +96,7 @@
     </div>
 
     <el-dialog v-model="showUpload" title="上传知识库文档" width="520px" destroy-on-close>
-      <KnowledgeUpload @success="onUploadSuccess" />
+      <KnowledgeUpload @success="onUploadSuccess" @duplicate="onUploadDuplicate" />
     </el-dialog>
 
     <el-drawer
@@ -140,6 +146,7 @@ const chunkDrawerVisible = ref(false)
 const chunkLoading = ref(false)
 const chunks = ref<KnowledgeChunk[]>([])
 const activeDoc = ref<KnowledgeDocument | null>(null)
+const highlightId = ref<number | null>(null)
 
 const chunkDrawerTitle = computed(() => {
   if (!activeDoc.value) return '分块列表'
@@ -187,7 +194,32 @@ async function loadList() {
 
 function onUploadSuccess() {
   showUpload.value = false
+  highlightId.value = null
   void loadList()
+}
+
+function rowClassName({ row }: { row: KnowledgeDocument }) {
+  return row.id === highlightId.value ? 'row-duplicate-highlight' : ''
+}
+
+async function onUploadDuplicate(documentId: number) {
+  showUpload.value = false
+  highlightId.value = documentId
+  await loadList()
+  const existing = documents.value.find((doc) => doc.id === documentId)
+  const title = existing?.title ?? `文档 #${documentId}`
+  try {
+    await ElMessageBox.confirm(
+      `列表中已存在相同内容的文档「${title}」。是否查看该文档的分块？`,
+      '文件重复',
+      { type: 'warning', confirmButtonText: '查看分块', cancelButtonText: '知道了' },
+    )
+    if (existing) {
+      await onViewChunks(existing)
+    }
+  } catch {
+    // 用户关闭对话框
+  }
 }
 
 async function onParse(id: number) {
@@ -301,6 +333,10 @@ onMounted(() => {
 
 .error-alert {
   margin-top: 16px;
+}
+
+:deep(.row-duplicate-highlight) {
+  --el-table-tr-bg-color: var(--el-color-warning-light-9);
 }
 
 @media (max-width: 768px) {

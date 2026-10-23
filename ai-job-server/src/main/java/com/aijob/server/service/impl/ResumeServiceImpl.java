@@ -5,7 +5,7 @@ import com.aijob.server.exception.ForbiddenException;
 import com.aijob.server.entity.Resume;
 import com.aijob.server.mapper.ResumeMapper;
 import com.aijob.server.service.ResumeService;
-import com.aijob.server.util.PdfTextExtractor;
+import com.aijob.server.util.DocumentTextExtractor;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -141,10 +141,10 @@ public class ResumeServiceImpl implements ResumeService {
 
             Path path = Paths.get(resume.getFilePath());
 
-            String text = PdfTextExtractor.extract(path);
+            String text = DocumentTextExtractor.extract(path, "PDF");
 
             if (text.isBlank()) {
-                throw new RuntimeException("未能从 PDF 中提取到文本");
+                throw new RuntimeException("未能从 PDF 中提取到文本（可能是扫描件/图片版，需 OCR）");
             }
 
             resume.setContent(text);
@@ -159,7 +159,7 @@ public class ResumeServiceImpl implements ResumeService {
             resume.setStatus("PARSE_FAILED");
             resumeMapper.updateById(resume);
 
-            throw new RuntimeException("简历解析失败", e);
+            throw new RuntimeException("简历解析失败：" + e.getMessage(), e);
         }
     }
 }

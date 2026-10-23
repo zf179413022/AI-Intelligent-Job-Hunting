@@ -26,6 +26,9 @@ public class KnowledgeDocument {
 
     private Long fileSize;
 
+    /** 文件内容 SHA-256（hex），同用户去重 */
+    private String contentHash;
+
     /**
      * UPLOADED / PARSED / CHUNKED / EMBEDDED / READY / FAILED
      */
