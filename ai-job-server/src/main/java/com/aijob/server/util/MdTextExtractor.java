@@ -8,32 +8,17 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.List;
 
 /**
- * Markdown → 纯文本（面向 RAG Embedding）。
+ * Markdown → 结构化 Markdown 文本（面向 RAG Embedding 与 LLM 阅读）。
  * <p>
- * 保留：标题文字、正文、代码块正文、列表/表格文字。<br>
- * 去掉：YAML frontmatter、链接/图片 URL、代码围栏与语言标记、行首 #。
+ * 保留：标题层级、表格、代码围栏与语言、列表、脚注定义。<br>
+ * 清理：YAML frontmatter、链接/图片 URL、HTML 标签、强调标记、反斜杠转义。
+ * <p>
+ * 解析逻辑见 {@link MarkdownDocumentParser}，本类只负责编码校验与门面。
  */
 public final class MdTextExtractor {
-
-    private static final Pattern FRONTMATTER = Pattern.compile(
-            "^---\\r?\\n.*?\\r?\\n---\\r?\\n?",
-            Pattern.DOTALL
-    );
-
-    private static final Pattern CODE_FENCE = Pattern.compile(
-            "```[^\\n]*\\r?\\n(.*?)```",
-            Pattern.DOTALL
-    );
-
-    private static final Pattern IMAGE = Pattern.compile("!\\[([^\\]]*)]\\([^)]*\\)");
-
-    private static final Pattern LINK = Pattern.compile("(?<!!)\\[([^\\]]+)]\\([^)]*\\)");
-
-    private static final Pattern HEADING = Pattern.compile("(?m)^(#{1,6})[ \\t]+(.+)$");
 
     private MdTextExtractor() {
     }
@@ -43,85 +28,70 @@ public final class MdTextExtractor {
     }
 
     public static DocumentExtractResult extractDetailed(Path filePath) {
-        String raw = readUtf8Strict(filePath);
-        String cleaned = clean(raw);
-        return new DocumentExtractResult(cleaned, null);
+        byte[] bytes;
+        try {
+            bytes = Files.readAllBytes(filePath);
+        } catch (IOException e) {
+            throw new DocumentParseException("Markdown 文件读取失败：" + e.getMessage(), e);
+        }
+        String raw = decodeUtf8(bytes);
+        List<DocumentBlock> blocks = MarkdownDocumentParser.parse(raw);
+        return new DocumentExtractResult(
+                DocumentTextRenderer.render(blocks), null, blocks, List.of());
     }
 
     static String clean(String raw) {
-        if (raw == null) {
-            return "";
-        }
-        String text = raw;
-        if (!text.isEmpty() && text.charAt(0) == '\uFEFF') {
-            text = text.substring(1);
-        }
-
-        Matcher fm = FRONTMATTER.matcher(text);
-        if (fm.find() && fm.start() == 0) {
-            text = text.substring(fm.end());
-        }
-
-        // 先抽出代码块正文，避免后续规则误伤代码
-        StringBuffer codeBuf = new StringBuffer();
-        Matcher codeMatcher = CODE_FENCE.matcher(text);
-        while (codeMatcher.find()) {
-            String body = codeMatcher.group(1) == null ? "" : codeMatcher.group(1);
-            // 去掉末尾多余换行，保留内部内容
-            if (body.endsWith("\r\n")) {
-                body = body.substring(0, body.length() - 2);
-            } else if (body.endsWith("\n")) {
-                body = body.substring(0, body.length() - 1);
-            }
-            codeMatcher.appendReplacement(codeBuf, Matcher.quoteReplacement(body));
-        }
-        codeMatcher.appendTail(codeBuf);
-        text = codeBuf.toString();
-
-        // 图片：有 alt 保留 alt；无 alt 整段删除
-        StringBuffer imgBuf = new StringBuffer();
-        Matcher imgMatcher = IMAGE.matcher(text);
-        while (imgMatcher.find()) {
-            String alt = imgMatcher.group(1) == null ? "" : imgMatcher.group(1).trim();
-            imgMatcher.appendReplacement(imgBuf, Matcher.quoteReplacement(alt));
-        }
-        imgMatcher.appendTail(imgBuf);
-        text = imgBuf.toString();
-
-        // 链接：保留锚文本
-        StringBuffer linkBuf = new StringBuffer();
-        Matcher linkMatcher = LINK.matcher(text);
-        while (linkMatcher.find()) {
-            String label = linkMatcher.group(1) == null ? "" : linkMatcher.group(1);
-            linkMatcher.appendReplacement(linkBuf, Matcher.quoteReplacement(label));
-        }
-        linkMatcher.appendTail(linkBuf);
-        text = linkBuf.toString();
-
-        // 标题：只去掉行首 #，保留标题文字
-        StringBuffer headingBuf = new StringBuffer();
-        Matcher headingMatcher = HEADING.matcher(text);
-        while (headingMatcher.find()) {
-            String title = headingMatcher.group(2) == null ? "" : headingMatcher.group(2).trim();
-            headingMatcher.appendReplacement(headingBuf, Matcher.quoteReplacement(title));
-        }
-        headingMatcher.appendTail(headingBuf);
-        text = headingBuf.toString();
-
-        return text.replace("\r\n", "\n").replace('\r', '\n').trim();
+        return DocumentTextRenderer.render(MarkdownDocumentParser.parse(raw));
     }
 
-    private static String readUtf8Strict(Path filePath) {
+    /** 严格 UTF-8 解码，失败时定位到行号，便于用户直接修复源文件。 */
+    private static String decodeUtf8(byte[] bytes) {
+        CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT);
         try {
-            byte[] bytes = Files.readAllBytes(filePath);
-            CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT);
             return decoder.decode(ByteBuffer.wrap(bytes)).toString();
         } catch (CharacterCodingException e) {
-            throw new RuntimeException("Markdown 不是合法 UTF-8 编码", e);
-        } catch (IOException e) {
-            throw new RuntimeException("Markdown 文件读取失败", e);
+            throw new DocumentParseException(
+                    "Markdown 不是合法 UTF-8 编码（第 " + firstInvalidLine(bytes) + " 行附近）", e);
         }
+    }
+
+    /** 按 UTF-8 规则扫描字节，返回第一个非法序列所在行号（1 起）。 */
+    private static int firstInvalidLine(byte[] bytes) {
+        int line = 1;
+        int i = 0;
+        while (i < bytes.length) {
+            int b = bytes[i] & 0xFF;
+            if (b == '\n') {
+                line++;
+                i++;
+                continue;
+            }
+            if (b < 0x80) {
+                i++;
+                continue;
+            }
+            int need;
+            if ((b & 0xE0) == 0xC0 && b >= 0xC2) {
+                need = 1;
+            } else if ((b & 0xF0) == 0xE0) {
+                need = 2;
+            } else if ((b & 0xF8) == 0xF0 && b <= 0xF4) {
+                need = 3;
+            } else {
+                return line;
+            }
+            if (i + need >= bytes.length) {
+                return line;
+            }
+            for (int k = 1; k <= need; k++) {
+                if ((bytes[i + k] & 0xC0) != 0x80) {
+                    return line;
+                }
+            }
+            i += need + 1;
+        }
+        return line;
     }
 }

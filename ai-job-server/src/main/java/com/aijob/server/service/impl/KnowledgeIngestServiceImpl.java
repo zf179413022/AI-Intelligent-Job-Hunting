@@ -8,6 +8,7 @@ import com.aijob.server.mapper.KnowledgeChunkMapper;
 import com.aijob.server.mapper.KnowledgeDocumentMapper;
 import com.aijob.server.service.KnowledgeIngestService;
 import com.aijob.server.service.KnowledgeVectorStoreService;
+import com.aijob.server.util.DocumentExtractResult;
 import com.aijob.server.util.DocumentTextExtractor;
 import com.aijob.server.util.KnowledgeTextChunker;
 import com.aijob.server.vo.KnowledgeIngestVO;
@@ -57,20 +58,23 @@ public class KnowledgeIngestServiceImpl implements KnowledgeIngestService {
         }
 
         Path path = Paths.get(document.getFilePath());
-        String text;
+        DocumentExtractResult extracted;
         try {
-            text = DocumentTextExtractor.extract(path, document.getFileType());
+            extracted = DocumentTextExtractor.extractDetailed(path, document.getFileType());
         } catch (Exception e) {
             fail(document, "切分前重新解析文档失败：" + safeMsg(e));
             throw new RuntimeException("切分失败：无法读取文档文本", e);
         }
 
-        if (text == null || text.isBlank()) {
+        if (extracted.isEmpty()) {
             fail(document, "文档文本为空，无法切分");
             throw new RuntimeException("文档文本为空，无法切分");
         }
 
-        List<String> parts = KnowledgeTextChunker.chunk(text);
+        List<String> parts = KnowledgeTextChunker.chunkBlocks(extracted.blocks());
+        if (parts.isEmpty()) {
+            parts = KnowledgeTextChunker.chunk(extracted.text());
+        }
         if (parts.isEmpty()) {
             throw new RuntimeException("未生成任何 chunk");
         }
