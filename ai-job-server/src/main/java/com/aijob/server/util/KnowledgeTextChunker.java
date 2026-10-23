@@ -4,6 +4,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * 知识库分块：目标约 700 字符，overlap 约 100。
@@ -18,8 +19,16 @@ public final class KnowledgeTextChunker {
 
     public static final int DEFAULT_MAX_CHARS = 700;
     public static final int DEFAULT_OVERLAP = 100;
-    /** chunk 前保留的标题层级数，过多会挤占正文预算。 */
-    private static final int MAX_HEADING_DEPTH = 2;
+    /** chunk 前保留的标题层级数；再长就只留最深层，避免标题挤占正文预算。 */
+    private static final int MAX_HEADING_DEPTH = 3;
+    private static final int MAX_PREFIX_CHARS = 60;
+    /** 表格/代码前不超过该长度的引言并入同一 chunk，避免产生低价值碎片。 */
+    private static final int INTRO_MERGE_MAX_CHARS = 200;
+    /** 顶层声明是代码块的安全切点：从这里开始新段，避免把方法拦腰截断。 */
+    private static final Pattern TOP_LEVEL_DECL = Pattern.compile(
+            "^ {0,2}(public|private|protected|static|final|abstract|class|interface|enum|record"
+                    + "|def|func|function|package|import|from|use|namespace|#include)\\b"
+                    + "|^ {0,2}@");
 
     private KnowledgeTextChunker() {
     }
@@ -117,12 +126,22 @@ public final class KnowledgeTextChunker {
 
             String prefix = headingPrefix(headings);
             if (block.isAtomic()) {
-                flush(current, chunks);
+                String intro = current.toString().trim();
+                current.setLength(0);
                 String body = DocumentTextRenderer.renderBlock(block);
-                if (body.length() + prefix.length() <= maxChars) {
-                    chunks.add(prefix + body);
+                int mergedLength = intro.length() + (intro.isEmpty() ? 0 : 1) + body.length();
+                if (!intro.isEmpty() && intro.length() <= INTRO_MERGE_MAX_CHARS && mergedLength <= maxChars) {
+                    // 短引言跟着表格/代码走，避免 72 字碎片挤占 top-k
+                    chunks.add(intro + "\n" + body);
                 } else {
-                    chunks.addAll(splitAtomic(block, prefix, maxChars));
+                    if (!intro.isEmpty()) {
+                        chunks.add(intro);
+                    }
+                    if (body.length() + prefix.length() <= maxChars) {
+                        chunks.add(prefix + body);
+                    } else {
+                        chunks.addAll(splitAtomic(block, prefix, maxChars));
+                    }
                 }
                 continue;
             }
@@ -163,7 +182,7 @@ public final class KnowledgeTextChunker {
         current.append(text);
     }
 
-    /** 超长表格保留表头后按行切片；超长代码块按行切片并重复围栏。 */
+    /** 超长表格保留表头后按行切片；超长代码块按逻辑边界切片并重复围栏。 */
     private static List<String> splitAtomic(DocumentBlock block, String prefix, int maxChars) {
         String[] lines = block.text().split("\n", -1);
         List<String> pieces = new ArrayList<>();
@@ -181,18 +200,87 @@ public final class KnowledgeTextChunker {
             }
             pieces.add(piece.toString());
         } else {
-            String lang = block.type() == DocumentBlock.Type.CODE ? block.meta() : "";
-            StringBuilder piece = new StringBuilder();
-            for (String line : lines) {
-                if (piece.length() + line.length() + 1 > budget) {
-                    pieces.add(DocumentTextRenderer.renderBlock(DocumentBlock.code(piece.toString(), lang)));
-                    piece.setLength(0);
-                }
-                piece.append(line).append('\n');
-            }
-            pieces.add(DocumentTextRenderer.renderBlock(DocumentBlock.code(piece.toString(), lang)));
+            pieces.addAll(splitCodeBlock(lines, block.meta(), budget));
         }
         return pieces.stream().map(piece -> prefix + piece.trim()).toList();
+    }
+
+    /**
+     * 代码块按「逻辑段」切分而不是按行硬切：空行、顶层声明（class/def/function/package…）
+     * 是段边界，切点优先落在段之间；只有单段本身超预算时才按行继续切。
+     */
+    private static List<String> splitCodeBlock(String[] lines, String lang, int budget) {
+        List<List<String>> segments = groupCodeSegments(List.of(lines));
+        List<String> pieces = new ArrayList<>();
+        List<String> current = new ArrayList<>();
+        int currentLength = 0;
+
+        for (List<String> segment : segments) {
+            int segmentLength = segment.stream().mapToInt(String::length).sum() + segment.size();
+            if (currentLength > 0 && currentLength + segmentLength > budget) {
+                pieces.add(renderCode(current, lang));
+                current = new ArrayList<>();
+                currentLength = 0;
+            }
+            if (segmentLength > budget) {
+                if (!current.isEmpty()) {
+                    pieces.add(renderCode(current, lang));
+                    current = new ArrayList<>();
+                    currentLength = 0;
+                }
+                pieces.addAll(splitCodeByLines(segment, lang, budget));
+                continue;
+            }
+            current.addAll(segment);
+            currentLength += segmentLength;
+        }
+        if (!current.isEmpty()) {
+            pieces.add(renderCode(current, lang));
+        }
+        return pieces;
+    }
+
+    private static List<List<String>> groupCodeSegments(List<String> lines) {
+        List<List<String>> segments = new ArrayList<>();
+        List<String> current = new ArrayList<>();
+        for (String line : lines) {
+            boolean boundary = current.isEmpty()
+                    || line.isBlank()
+                    || TOP_LEVEL_DECL.matcher(line).find();
+            if (boundary && !current.isEmpty()) {
+                segments.add(current);
+                current = new ArrayList<>();
+            }
+            if (!line.isBlank() || !current.isEmpty()) {
+                current.add(line);
+            }
+        }
+        if (!current.isEmpty()) {
+            segments.add(current);
+        }
+        return segments;
+    }
+    private static List<String> splitCodeByLines(List<String> lines, String lang, int budget) {
+        List<String> pieces = new ArrayList<>();
+        List<String> current = new ArrayList<>();
+        int length = 0;
+        for (String line : lines) {
+            if (length > 0 && length + line.length() + 1 > budget) {
+                pieces.add(renderCode(current, lang));
+                current = new ArrayList<>();
+                length = 0;
+            }
+            current.add(line);
+            length += line.length() + 1;
+        }
+        if (!current.isEmpty()) {
+            pieces.add(renderCode(current, lang));
+        }
+        return pieces;
+    }
+
+    private static String renderCode(List<String> lines, String lang) {
+        return DocumentTextRenderer.renderBlock(DocumentBlock.code(String.join("\n", lines), lang));
     }
 
     private static String headingPrefix(Deque<DocumentBlock> headings) {
@@ -204,7 +292,15 @@ public final class KnowledgeTextChunker {
             path.add(heading.text());
         }
         int from = Math.max(0, path.size() - MAX_HEADING_DEPTH);
-        return String.join(" > ", path.subList(from, path.size())) + "\n";
+        List<String> tail = new ArrayList<>(path.subList(from, path.size()));
+        String joined = String.join(" > ", tail);
+        while (joined.length() > MAX_PREFIX_CHARS && tail.size() > 1) {
+            tail.removeFirst();
+            joined = String.join(" > ", tail);
+        }
+        return (joined.length() > MAX_PREFIX_CHARS
+                ? joined.substring(0, MAX_PREFIX_CHARS)
+                : joined) + "\n";
     }
 
     private static void flush(StringBuilder current, List<String> chunks) {

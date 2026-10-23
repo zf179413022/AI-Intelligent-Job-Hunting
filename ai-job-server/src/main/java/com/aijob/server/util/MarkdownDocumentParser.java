@@ -190,6 +190,10 @@ public final class MarkdownDocumentParser {
         if (cols == 0) {
             return start + 1;
         }
+        List<String> aligns = new ArrayList<>(delimiter.size());
+        for (String cell : delimiter) {
+            aligns.add(alignmentOf(cell));
+        }
         List<List<String>> rows = new ArrayList<>();
         rows.add(normalizeCells(header, cols));
         int i = start + 2;
@@ -201,8 +205,22 @@ public final class MarkdownDocumentParser {
             rows.add(normalizeCells(splitRow(line), cols));
             i++;
         }
-        out.add(DocumentBlock.table(renderTable(rows)));
+        out.add(DocumentBlock.table(renderTable(rows, aligns, cols)));
         return i;
+    }
+
+    /** 保留 GFM 对齐标记（:--- / ---: / :---:），避免解析后丢失列语义。 */
+    private static String alignmentOf(String delimiterCell) {
+        String cell = delimiterCell.replace(" ", "");
+        boolean left = cell.startsWith(":");
+        boolean right = cell.endsWith(":");
+        if (left && right) {
+            return ":---:";
+        }
+        if (left) {
+            return ":---";
+        }
+        return right ? "---:" : "---";
     }
 
     private static int readQuote(List<String> lines, int start, List<DocumentBlock> out) {
@@ -289,11 +307,11 @@ public final class MarkdownDocumentParser {
         return normalized;
     }
 
-    private static String renderTable(List<List<String>> rows) {
+    private static String renderTable(List<List<String>> rows, List<String> aligns, int cols) {
         StringBuilder sb = new StringBuilder();
         appendTableRow(sb, rows.getFirst());
         sb.append('\n');
-        appendDelimiterRow(sb, rows.getFirst().size());
+        appendDelimiterRow(sb, aligns, cols);
         for (int r = 1; r < rows.size(); r++) {
             sb.append('\n');
             appendTableRow(sb, rows.get(r));
@@ -312,10 +330,11 @@ public final class MarkdownDocumentParser {
         return cell.replace("|", "\\|");
     }
 
-    private static void appendDelimiterRow(StringBuilder sb, int cols) {
+    private static void appendDelimiterRow(StringBuilder sb, List<String> aligns, int cols) {
         sb.append('|');
         for (int i = 0; i < cols; i++) {
-            sb.append(" --- |");
+            String align = i < aligns.size() ? aligns.get(i) : "---";
+            sb.append(' ').append(align).append(" |");
         }
     }
 

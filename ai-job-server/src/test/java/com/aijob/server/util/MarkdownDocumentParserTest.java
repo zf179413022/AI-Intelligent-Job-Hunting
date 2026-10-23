@@ -184,6 +184,19 @@ class MarkdownDocumentParserTest {
     }
 
     @Test
+    void tableKeepsColumnAlignment() {
+        String md = """
+                | 名称 | 价格 | 库存 |
+                |:--- | ---: | :---: |
+                | 键盘 | 199 | 100 |
+                """;
+
+        DocumentBlock table = MarkdownDocumentParser.parse(md).getFirst();
+
+        assertTrue(table.text().contains("| :--- | ---: | :---: |"), table.text());
+    }
+
+    @Test
     void rendersTableAndCodeAsMarkdown() {
         List<DocumentBlock> blocks = List.of(
                 DocumentBlock.heading(2, "标题"),

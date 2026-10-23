@@ -71,6 +71,21 @@ class PdfDocumentParserTest {
         assertEquals(1, result.pageCount());
     }
 
+    @Test
+    void twoColumnPdfIsReadColumnByColumnNotAsTable() throws IOException {
+        Path pdf = twoColumnPdf(tempDir.resolve("two-column.pdf"));
+
+        PdfDocumentParser.ParseResult result = PdfDocumentParser.parse(pdf);
+
+        assertTrue(result.blocks().stream().noneMatch(block -> block.type() == DocumentBlock.Type.TABLE),
+                "双栏不应被误判为表格：" + result.blocks());
+        String all = String.join("\n",
+                result.blocks().stream().map(DocumentBlock::text).toList());
+        assertTrue(all.contains("LEFT column line 5"), all);
+        assertTrue(all.contains("RIGHT column line 5"), all);
+        assertTrue(all.indexOf("LEFT") < all.indexOf("RIGHT"), "应先读左栏再读右栏：" + all);
+    }
+
     private static boolean hasType(List<DocumentBlock> blocks, DocumentBlock.Type type) {
         return blocks.stream().anyMatch(block -> block.type() == type);
     }
@@ -114,6 +129,26 @@ class PdfDocumentParserTest {
                         "[1] Virtual threads are final in JDK 21.");
             }
 
+            doc.save(target.toFile());
+        }
+        return target;
+    }
+
+    /** 双栏夹具：左右各 6 行，中缝处大间隙，用于验证分栏而不是误判成表格。 */
+    private static Path twoColumnPdf(Path target) throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.A4);
+            doc.addPage(page);
+            float height = page.getMediaBox().getHeight();
+            try (PDPageContentStream content = new PDPageContentStream(doc, page)) {
+                for (int i = 0; i < 6; i++) {
+                    float y = height - 80 - i * 16;
+                    text(content, 50, y, 10, Standard14Fonts.FontName.HELVETICA,
+                            "LEFT column line " + i + " with some words");
+                    text(content, 330, y, 10, Standard14Fonts.FontName.HELVETICA,
+                            "RIGHT column line " + i + " with some words");
+                }
+            }
             doc.save(target.toFile());
         }
         return target;
