@@ -1,0 +1,210 @@
+### 1. 注册（用户已存在会失败，可跳过）
+POST http://localhost:8080/api/auth/register
+Content-Type: application/json
+
+{
+  "username": "myq",
+  "password": "123456",
+  "email": "myq@example.com"
+}
+
+### 2. 登录（先点这个，会自动把 token 存起来）
+# @name login
+POST http://localhost:8080/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "myq",
+  "password": "123456"
+}
+
+> {%
+    client.global.set("token", response.body.token);
+%}
+
+### 3. 查看我的简历（必须先成功执行上面的登录）
+GET http://localhost:8080/api/resumes
+Authorization: Bearer {{token}}
+
+### 4. 上传简历（把下面路径换成你自己的 PDF）
+POST http://localhost:8080/api/resumes/upload
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="resume.pdf"
+Content-Type: application/pdf
+
+< C:\Users\qqjer\Desktop\简历\简历 (1).pdf
+--WebAppBoundary--
+
+### 5. 解析简历（把 id 改成真实 resumeId）
+POST http://localhost:8080/api/resumes/3/parse
+Authorization: Bearer {{token}}
+
+### 6. AI 分析简历（Java 调用 Python，需先 parse）
+POST http://localhost:8080/api/resumes/3/ai-analyze
+Authorization: Bearer {{token}}
+
+### 7. 查询最新 AI 分析结果
+GET http://localhost:8080/api/resumes/3/ai-analysis
+Authorization: Bearer {{token}}
+
+### 8. 删除简历（把 id 改成真实 resumeId）
+DELETE http://localhost:8080/api/resumes/2
+Authorization: Bearer {{token}}
+
+### 9. AI 岗位匹配
+POST http://localhost:8080/api/job-matches
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "resumeId": 3,
+  "jobName": "Java开发工程师",
+  "companyName": "XX科技有限公司",
+  "jobDescription": "负责Java后端系统开发；熟悉Java、Spring Boot、MySQL、Redis；了解Spring Cloud；有良好的代码规范；有项目开发经验。优先考虑有微服务与中间件实践经验的候选人，能够独立完成需求分析、接口设计与联调。"
+}
+
+### 10. 岗位匹配历史
+GET http://localhost:8080/api/job-matches
+Authorization: Bearer {{token}}
+
+### 11. 岗位匹配详情（改成真实 id）
+GET http://localhost:8080/api/job-matches/1
+Authorization: Bearer {{token}}
+
+### 12. 删除岗位匹配记录
+DELETE http://localhost:8080/api/job-matches/1
+Authorization: Bearer {{token}}
+
+### 13. 创建模拟面试
+POST http://localhost:8080/api/interviews
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "resumeId": 3,
+  "position": "Java开发工程师"
+}
+
+### 14. 开始面试（AI 出第一题）
+POST http://localhost:8080/api/interviews/1/start
+Authorization: Bearer {{token}}
+
+### 15. 回答并追问（可多次）
+POST http://localhost:8080/api/interviews/1/answer
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "answer": "Spring Boot 通过自动配置减少了大量 XML 配置，启动时根据类路径条件装配 Bean。"
+}
+
+### 16. 结束面试并生成报告
+POST http://localhost:8080/api/interviews/1/finish
+Authorization: Bearer {{token}}
+
+### 17. 面试历史
+GET http://localhost:8080/api/interviews
+Authorization: Bearer {{token}}
+
+### 18. 面试详情
+GET http://localhost:8080/api/interviews/1
+Authorization: Bearer {{token}}
+
+### 19. 面试对话
+GET http://localhost:8080/api/interviews/1/messages
+Authorization: Bearer {{token}}
+
+### 20. 面试报告
+GET http://localhost:8080/api/interviews/1/report
+Authorization: Bearer {{token}}
+
+### 21. 删除面试
+DELETE http://localhost:8080/api/interviews/1
+Authorization: Bearer {{token}}
+
+### ========== RAG 知识库 5.2 ==========
+
+### 22. 上传知识库 PDF（路径换成你的 PDF；上传后自动解析 → PARSED/FAILED）
+# @name knowledgeUpload
+POST http://localhost:8080/api/knowledge/documents
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=KnowledgeBoundary
+
+--KnowledgeBoundary
+Content-Disposition: form-data; name="file"; filename="java-interview.pdf"
+Content-Type: application/pdf
+
+< C:\Users\qqjer\Desktop\简历\简历 (1).pdf
+--KnowledgeBoundary--
+
+> {%
+    client.global.set("knowledgeDocId", response.body.id);
+%}
+
+### 23. 知识库文档列表
+GET http://localhost:8080/api/knowledge/documents
+Authorization: Bearer {{token}}
+
+### 24. 知识库文档详情
+GET http://localhost:8080/api/knowledge/documents/{{knowledgeDocId}}
+Authorization: Bearer {{token}}
+
+### 25. 重新解析（FAILED 时可重试）
+POST http://localhost:8080/api/knowledge/documents/{{knowledgeDocId}}/parse
+Authorization: Bearer {{token}}
+
+### 26. 删除知识库文档
+DELETE http://localhost:8080/api/knowledge/documents/{{knowledgeDocId}}
+Authorization: Bearer {{token}}
+
+### 27. LangChain4j → DeepSeek 最小验证（RAG 5.3，非完整 RAG）
+POST http://localhost:8080/api/knowledge/ai/chat
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "prompt": "用一句话解释什么是 HashMap，不要超过40字。"
+}
+
+### 28. Chunk + Embedding + 写入 Chroma（RAG 5.5）
+# 前置：Docker Chroma 已启动（scripts/start-chroma-docker.cmd）
+POST http://localhost:8080/api/knowledge/documents/{{knowledgeDocId}}/ingest
+Authorization: Bearer {{token}}
+
+### 29. 查看分块列表（应含 vectorId）
+GET http://localhost:8080/api/knowledge/documents/{{knowledgeDocId}}/chunks
+Authorization: Bearer {{token}}
+
+### 30. RAG 5.6.1：仅 Top-K 检索（不调用 DeepSeek）
+POST http://localhost:8080/api/knowledge/ai/retrieve
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "question": "Java中的HashMap是怎么实现的？",
+  "topK": 5
+}
+
+### 31. RAG 5.6：完整问答（Top-K + Context + DeepSeek + Sources）
+POST http://localhost:8080/api/knowledge/ai/ask
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "question": "Java中的HashMap是怎么实现的？",
+  "topK": 5
+}
+
+### 32. RAG 5.9：SSE 流式问答（event=meta|delta|done|error）
+POST http://localhost:8080/api/knowledge/ai/ask/stream
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "question": "How does Spring Boot autoconfiguration work?",
+  "topK": 5
+}

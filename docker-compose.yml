@@ -1,0 +1,79 @@
+# 基础设施一键启动：MySQL + Redis + Chroma
+# 用法（仓库根目录）：
+#   docker compose up -d
+#   docker compose ps
+#   docker compose down
+#
+# Spring Boot / Python / Vue 仍在本机运行，连接：
+#   MySQL  127.0.0.1:3306  root/root  库 ai_job_platform
+#   Redis  127.0.0.1:6379
+#   Chroma 127.0.0.1:8000
+#
+# 注意：若本机已占用 3306/6379/8000，请先停掉本机服务，或改下方 ports。
+# MySQL 初始化脚本仅在数据卷首次创建时执行。
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: ai-job-mysql
+    ports:
+      - "127.0.0.1:3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ai_job_platform
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=caching_sha2_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./ai-job-server/sql/init_user.sql:/docker-entrypoint-initdb.d/01-init_user.sql:ro
+      - ./ai-job-server/sql/init_resume.sql:/docker-entrypoint-initdb.d/02-init_resume.sql:ro
+      - ./ai-job-server/sql/init_resume_ai_analysis.sql:/docker-entrypoint-initdb.d/03-init_resume_ai_analysis.sql:ro
+      - ./ai-job-server/sql/job_match.sql:/docker-entrypoint-initdb.d/04-job_match.sql:ro
+      - ./ai-job-server/sql/interview.sql:/docker-entrypoint-initdb.d/05-interview.sql:ro
+      - ./ai-job-server/sql/knowledge.sql:/docker-entrypoint-initdb.d/06-knowledge.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-job-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  chroma:
+    image: chromadb/chroma:1.0.0
+    container_name: ai-job-chroma
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+      PERSIST_DIRECTORY: "/chroma/chroma"
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+    name: ai-job-mysql-data
+  redis_data:
+    name: ai-job-redis-data
+  chroma_data:
+    name: ai-job-chroma-data
