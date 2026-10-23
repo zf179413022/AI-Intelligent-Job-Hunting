@@ -1,15 +1,25 @@
 package com.aijob.server.util;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 
 /**
- * 知识库文本分块：优先按段落，目标约 500～800 中文字符，overlap 约 80～120。
+ * 知识库分块：目标约 700 字符，overlap 约 100。
+ * <p>
+ * 两种入口：
+ * <ul>
+ *   <li>{@link #chunk(String)}：纯文本，按段落贪心合并（兼容旧调用方）</li>
+ *   <li>{@link #chunkBlocks(List)}：结构化块，表格/代码整体保留，块前附带标题路径</li>
+ * </ul>
  */
 public final class KnowledgeTextChunker {
 
     public static final int DEFAULT_MAX_CHARS = 700;
     public static final int DEFAULT_OVERLAP = 100;
+    /** chunk 前保留的标题层级数，过多会挤占正文预算。 */
+    private static final int MAX_HEADING_DEPTH = 2;
 
     private KnowledgeTextChunker() {
     }
@@ -22,12 +32,8 @@ public final class KnowledgeTextChunker {
         if (text == null || text.isBlank()) {
             return List.of();
         }
-        if (maxChars < 100) {
-            maxChars = DEFAULT_MAX_CHARS;
-        }
-        if (overlap < 0 || overlap >= maxChars) {
-            overlap = Math.min(DEFAULT_OVERLAP, maxChars / 5);
-        }
+        maxChars = normalizeMax(maxChars);
+        overlap = normalizeOverlap(overlap, maxChars);
 
         String normalized = text
                 .replace("\r\n", "\n")
@@ -75,6 +81,150 @@ public final class KnowledgeTextChunker {
         return chunks.stream().filter(s -> !s.isBlank()).toList();
     }
 
+    // ---------- 结构化分块 ----------
+
+    public static List<String> chunkBlocks(List<DocumentBlock> blocks) {
+        return chunkBlocks(blocks, DEFAULT_MAX_CHARS, DEFAULT_OVERLAP);
+    }
+
+    /**
+     * 表格/代码块不拆分，段落按字符预算合并；每个 chunk 带「最近标题路径」前缀，
+     * 让脱离上下文的 chunk 也能被检索命中。
+     */
+    public static List<String> chunkBlocks(List<DocumentBlock> blocks, int maxChars, int overlap) {
+        if (blocks == null || blocks.isEmpty()) {
+            return List.of();
+        }
+        maxChars = normalizeMax(maxChars);
+        overlap = normalizeOverlap(overlap, maxChars);
+
+        List<String> chunks = new ArrayList<>();
+        Deque<DocumentBlock> headings = new ArrayDeque<>();
+        StringBuilder current = new StringBuilder();
+
+        for (DocumentBlock block : blocks) {
+            if (block == null || block.isBlank()) {
+                continue;
+            }
+            if (block.type() == DocumentBlock.Type.HEADING) {
+                flush(current, chunks);
+                while (!headings.isEmpty() && headings.peekLast().level() >= block.level()) {
+                    headings.removeLast();
+                }
+                headings.addLast(block);
+                continue;
+            }
+
+            String prefix = headingPrefix(headings);
+            if (block.isAtomic()) {
+                flush(current, chunks);
+                String body = DocumentTextRenderer.renderBlock(block);
+                if (body.length() + prefix.length() <= maxChars) {
+                    chunks.add(prefix + body);
+                } else {
+                    chunks.addAll(splitAtomic(block, prefix, maxChars));
+                }
+                continue;
+            }
+
+            appendText(current, prefix, DocumentTextRenderer.renderBlock(block), maxChars, overlap, chunks);
+        }
+        flush(current, chunks);
+        return chunks.stream().filter(s -> !s.isBlank()).toList();
+    }
+
+    private static void appendText(StringBuilder current, String prefix, String text,
+                                   int maxChars, int overlap, List<String> chunks) {
+        int textBudget = Math.max(100, maxChars - prefix.length());
+        if (text.length() > textBudget) {
+            flush(current, chunks);
+            for (String part : splitLongText(text, textBudget, overlap)) {
+                chunks.add(prefix + part);
+            }
+            return;
+        }
+        if (current.length() == 0) {
+            current.append(prefix);
+        }
+        if (current.length() + 1 + text.length() <= maxChars) {
+            if (current.length() > prefix.length()) {
+                current.append('\n');
+            }
+            current.append(text);
+            return;
+        }
+        chunks.add(current.toString().trim());
+        String overlapText = takeOverlap(current.toString(), overlap);
+        current.setLength(0);
+        current.append(prefix);
+        if (!overlapText.isEmpty() && prefix.length() + overlapText.length() < maxChars) {
+            current.append(overlapText).append('\n');
+        }
+        current.append(text);
+    }
+
+    /** 超长表格保留表头后按行切片；超长代码块按行切片并重复围栏。 */
+    private static List<String> splitAtomic(DocumentBlock block, String prefix, int maxChars) {
+        String[] lines = block.text().split("\n", -1);
+        List<String> pieces = new ArrayList<>();
+        int budget = Math.max(100, maxChars - prefix.length());
+
+        if (block.type() == DocumentBlock.Type.TABLE && lines.length > 2) {
+            String header = lines[0] + "\n" + lines[1] + "\n";
+            StringBuilder piece = new StringBuilder(header);
+            for (int i = 2; i < lines.length; i++) {
+                if (piece.length() + lines[i].length() + 1 > budget) {
+                    pieces.add(piece.toString());
+                    piece = new StringBuilder(header);
+                }
+                piece.append(lines[i]).append('\n');
+            }
+            pieces.add(piece.toString());
+        } else {
+            String lang = block.type() == DocumentBlock.Type.CODE ? block.meta() : "";
+            StringBuilder piece = new StringBuilder();
+            for (String line : lines) {
+                if (piece.length() + line.length() + 1 > budget) {
+                    pieces.add(DocumentTextRenderer.renderBlock(DocumentBlock.code(piece.toString(), lang)));
+                    piece.setLength(0);
+                }
+                piece.append(line).append('\n');
+            }
+            pieces.add(DocumentTextRenderer.renderBlock(DocumentBlock.code(piece.toString(), lang)));
+        }
+        return pieces.stream().map(piece -> prefix + piece.trim()).toList();
+    }
+
+    private static String headingPrefix(Deque<DocumentBlock> headings) {
+        if (headings.isEmpty()) {
+            return "";
+        }
+        List<String> path = new ArrayList<>();
+        for (DocumentBlock heading : headings) {
+            path.add(heading.text());
+        }
+        int from = Math.max(0, path.size() - MAX_HEADING_DEPTH);
+        return String.join(" > ", path.subList(from, path.size())) + "\n";
+    }
+
+    private static void flush(StringBuilder current, List<String> chunks) {
+        String text = current.toString().trim();
+        if (!text.isEmpty()) {
+            chunks.add(text);
+        }
+        current.setLength(0);
+    }
+
+    private static int normalizeMax(int maxChars) {
+        return maxChars < 100 ? DEFAULT_MAX_CHARS : maxChars;
+    }
+
+    private static int normalizeOverlap(int overlap, int maxChars) {
+        return (overlap < 0 || overlap >= maxChars) ? Math.min(DEFAULT_OVERLAP, maxChars / 5) : overlap;
+    }
+
+    // ---------- 通用工具 ----------
+
     private static List<String> splitParagraphs(String text) {
         String[] raw = text.split("\\n\\s*\\n+");
         List<String> list = new ArrayList<>();
@@ -114,7 +264,6 @@ public final class KnowledgeTextChunker {
     }
 
     private static int findBreak(String text, int start, int end) {
-        // 尽量在句号/问号/换行处切断
         for (int i = end; i > start; i--) {
             char c = text.charAt(i - 1);
             if (c == '。' || c == '！' || c == '？' || c == '\n' || c == '.' || c == '!' || c == '?') {

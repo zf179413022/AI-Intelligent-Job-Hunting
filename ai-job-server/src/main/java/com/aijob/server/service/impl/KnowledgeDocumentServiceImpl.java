@@ -191,14 +191,10 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
             Path path = Paths.get(document.getFilePath());
             DocumentExtractResult result = DocumentTextExtractor.extractDetailed(path, document.getFileType());
 
-            if (result.text() == null || result.text().isBlank()) {
+            if (result.isEmpty()) {
                 document.setStatus("FAILED");
-                if ("MD".equalsIgnoreCase(document.getFileType())) {
-                    document.setErrorMessage("未能从 Markdown 中提取到文本（可能是空文件）");
-                } else {
-                    document.setErrorMessage("未能从 PDF 中提取到文本（可能是扫描件）");
-                }
                 document.setPageCount(result.pageCount());
+                document.setErrorMessage(emptyMessage(document.getFileType(), result.warnings()));
                 knowledgeDocumentMapper.updateById(document);
                 return knowledgeDocumentMapper.selectById(document.getId());
             }
@@ -218,6 +214,17 @@ public class KnowledgeDocumentServiceImpl implements KnowledgeDocumentService {
             knowledgeDocumentMapper.updateById(document);
             return knowledgeDocumentMapper.selectById(document.getId());
         }
+    }
+
+    /** 空文本时给出可操作的定位：PDF 多为扫描件/图片，Markdown 多为空文件或纯 frontmatter。 */
+    private static String emptyMessage(String fileType, List<String> warnings) {
+        String base = "MD".equalsIgnoreCase(fileType)
+                ? "未能从 Markdown 中提取到文本（空文件或仅含 frontmatter）"
+                : "未能从 PDF 中提取到文本（可能是扫描件/图片版，需 OCR）";
+        if (warnings.isEmpty()) {
+            return base;
+        }
+        return base + "；" + String.join("；", warnings.subList(0, Math.min(3, warnings.size())));
     }
 
     private void rejectIfDuplicate(Long userId, String contentHash) {
