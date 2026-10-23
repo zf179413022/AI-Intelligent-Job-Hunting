@@ -2,6 +2,7 @@ package com.aijob.server.service.impl;
 
 import com.aijob.server.exception.ForbiddenException;
 
+import com.aijob.server.dto.InterviewAnswerReplay;
 import com.aijob.server.dto.InterviewSession;
 import com.aijob.server.entity.Interview;
 import com.aijob.server.entity.InterviewMessage;
@@ -37,6 +38,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Service
@@ -165,6 +167,10 @@ public class InterviewServiceImpl implements InterviewService {
 
         InterviewSession session = newSession(interview, resume);
         session.setStatus("RUNNING");
+        session.setRound(0);
+        session.setStage("opening");
+        session.setCurrentQuestion(question);
+        session.setLastToolStatus("NONE");
         session.getMessages().add(new InterviewSession.SessionMessage("AI", question));
         interviewSessionService.save(session);
 
@@ -173,7 +179,7 @@ public class InterviewServiceImpl implements InterviewService {
 
     @Override
     @Transactional
-    public InterviewAnswerVO answer(Long id, Long userId, String answer) {
+    public InterviewAnswerVO answer(Long id, Long userId, String answer, String requestId) {
         Interview interview = getById(id, userId);
 
         if (!"RUNNING".equals(interview.getStatus())) {
@@ -183,42 +189,66 @@ public class InterviewServiceImpl implements InterviewService {
         if (answer == null || answer.isBlank()) {
             throw new RuntimeException("回答内容不能为空");
         }
+        requireRequestId(requestId);
 
-        Resume resume = requireParsedResume(interview);
-        HistoryBundle historyBundle = loadHistoryForAi(interview, resume);
-        List<InterviewMessage> history = historyBundle.messages();
-
-        String currentQuestion = findLatestAiQuestion(history);
-        if (currentQuestion == null) {
-            throw new RuntimeException("未找到当前面试题，请重新开始面试");
+        Optional<InterviewAnswerReplay> replay = interviewSessionService.beginAnswer(id, requestId);
+        if (replay.isPresent()) {
+            return replayVo(id, userId, replay.get());
         }
 
-        InterviewAnswerAiResult aiResult = aiInterviewService.answer(
-                historyBundle.resumeContent(),
-                interview.getPosition(),
-                history,
-                currentQuestion,
-                answer.trim()
-        );
+        boolean turnHeld = false;
+        try {
+            Resume resume = requireParsedResume(interview);
+            HistoryBundle historyBundle = loadHistoryForAi(interview, resume);
+            List<InterviewMessage> history = historyBundle.messages();
 
-        if (aiResult == null) {
-            throw new RuntimeException("AI面试回答分析失败");
+            String currentQuestion = findLatestAiQuestion(history);
+            if (currentQuestion == null) {
+                throw new RuntimeException("未找到当前面试题，请重新开始面试");
+            }
+            int expectedRound = countUserMessages(history);
+            if (!interviewSessionService.acquireTurn(id, requestId, expectedRound)) {
+                throw new RuntimeException("当前面试轮次正在处理，请稍后重试");
+            }
+            turnHeld = true;
+
+            InterviewAnswerAiResult aiResult = aiInterviewService.answer(
+                    historyBundle.resumeContent(),
+                    interview.getPosition(),
+                    history,
+                    currentQuestion,
+                    answer.trim(),
+                    userId,
+                    interview.getId()
+            );
+
+            if (aiResult == null) {
+                throw new RuntimeException("AI面试回答分析失败");
+            }
+
+            PersistedAnswer persisted = persistAnswerResult(
+                    interview, resume, historyBundle, history, answer.trim(), aiResult, expectedRound
+            );
+            InterviewAnswerVO vo = new InterviewAnswerVO(
+                    interviewMapper.selectById(id),
+                    persisted.evaluation(),
+                    persisted.aiMessage(),
+                    persisted.shouldContinue()
+            );
+            interviewSessionService.storeAnswer(id, requestId, toReplay(persisted, aiResult));
+            return vo;
+        } catch (RuntimeException e) {
+            interviewSessionService.releaseAnswer(id, requestId);
+            throw e;
+        } finally {
+            if (turnHeld) {
+                interviewSessionService.releaseTurn(id, requestId);
+            }
         }
-
-        PersistedAnswer persisted = persistAnswerResult(
-                interview, resume, historyBundle, history, answer.trim(), aiResult
-        );
-
-        return new InterviewAnswerVO(
-                interviewMapper.selectById(id),
-                persisted.evaluation(),
-                persisted.aiMessage(),
-                persisted.shouldContinue()
-        );
     }
 
     @Override
-    public void answerStream(Long id, Long userId, String answer, SseEmitter emitter) {
+    public void answerStream(Long id, Long userId, String answer, String requestId, SseEmitter emitter) {
         try {
             Interview interview = getById(id, userId);
 
@@ -231,6 +261,14 @@ public class InterviewServiceImpl implements InterviewService {
                 sendSseError(emitter, "回答内容不能为空");
                 return;
             }
+            requireRequestId(requestId);
+
+            Optional<InterviewAnswerReplay> replay = interviewSessionService.beginAnswer(id, requestId);
+            if (replay.isPresent()) {
+                sendAnswerDone(emitter, new AtomicBoolean(false), id, requestId,
+                        replayVo(id, userId, replay.get()), replay.get().getNextQuestion());
+                return;
+            }
 
             Resume resume = requireParsedResume(interview);
             HistoryBundle historyBundle = loadHistoryForAi(interview, resume);
@@ -238,34 +276,59 @@ public class InterviewServiceImpl implements InterviewService {
 
             String currentQuestion = findLatestAiQuestion(history);
             if (currentQuestion == null) {
+                interviewSessionService.releaseAnswer(id, requestId);
                 sendSseError(emitter, "未找到当前面试题，请重新开始面试");
+                return;
+            }
+            int expectedRound = countUserMessages(history);
+            if (!interviewSessionService.acquireTurn(id, requestId, expectedRound)) {
+                interviewSessionService.releaseAnswer(id, requestId);
+                sendSseError(emitter, "当前面试轮次正在处理，请稍后重试");
                 return;
             }
 
             final String trimmedAnswer = answer.trim();
+            final AtomicBoolean sseClosed = new AtomicBoolean(false);
+            try {
             aiInterviewService.answerStream(
                     historyBundle.resumeContent(),
                     interview.getPosition(),
                     history,
                     currentQuestion,
                     trimmedAnswer,
+                    userId,
+                    interview.getId(),
                     new InterviewAnswerStreamHandler() {
                         @Override
+                        public void onTool(String name, String status) {
+                            Map<String, String> payload = new LinkedHashMap<>();
+                            payload.put("name", name);
+                            payload.put("status", status);
+                            safeSend(emitter, sseClosed, id, requestId, "tool",
+                                    SseEmitter.event().name("tool").data(payload));
+                        }
+
+                        @Override
+                        public void onRoute(String action) {
+                            safeSend(emitter, sseClosed, id, requestId, "route",
+                                    SseEmitter.event().name("route")
+                                            .data(Map.of("action", action == null ? "" : action)));
+                        }
+
+                        @Override
                         public void onDelta(String content) {
-                            try {
-                                emitter.send(SseEmitter.event()
-                                        .name("delta")
-                                        .data(Map.of("content", content)));
-                            } catch (IOException e) {
-                                throw new RuntimeException(e);
-                            }
+                            safeSend(emitter, sseClosed, id, requestId, "delta",
+                                    SseEmitter.event().name("delta").data(Map.of("content", content)));
                         }
 
                         @Override
                         public void onDone(InterviewAnswerAiResult aiResult) {
                             try {
                                 if (aiResult == null) {
-                                    sendSseError(emitter, "AI面试回答分析失败");
+                                    interviewSessionService.releaseAnswer(id, requestId);
+                                    safeSend(emitter, sseClosed, id, requestId, "error",
+                                            SseEmitter.event().name("error")
+                                                    .data(Map.of("message", "AI面试回答分析失败")));
                                     return;
                                 }
                                 PersistedAnswer persisted = persistAnswerResult(
@@ -274,35 +337,44 @@ public class InterviewServiceImpl implements InterviewService {
                                         historyBundle,
                                         history,
                                         trimmedAnswer,
-                                        aiResult
+                                        aiResult,
+                                        expectedRound
                                 );
-                                Map<String, Object> payload = new LinkedHashMap<>();
-                                payload.put("evaluation", persisted.evaluation());
-                                payload.put(
-                                        "nextQuestion",
-                                        aiResult.getNextQuestion() == null
-                                                ? ""
-                                                : aiResult.getNextQuestion().trim()
-                                );
-                                payload.put("shouldContinue", persisted.shouldContinue());
-                                payload.put("message", persisted.aiMessage());
-                                payload.put("interview", interviewMapper.selectById(id));
-                                emitter.send(SseEmitter.event().name("done").data(payload));
-                                emitter.complete();
+                                interviewSessionService.storeAnswer(id, requestId, toReplay(persisted, aiResult));
+                                sendAnswerDone(emitter, sseClosed, id, requestId, new InterviewAnswerVO(
+                                        interviewMapper.selectById(id),
+                                        persisted.evaluation(),
+                                        persisted.aiMessage(),
+                                        persisted.shouldContinue()
+                                ), aiResult.getNextQuestion());
                             } catch (Exception e) {
-                                sendSseError(emitter, e.getMessage() == null
-                                        ? "流式面试落库失败"
-                                        : e.getMessage());
+                                interviewSessionService.releaseAnswer(id, requestId);
+                                safeSend(emitter, sseClosed, id, requestId, "error",
+                                        SseEmitter.event().name("error").data(Map.of(
+                                                "message",
+                                                e.getMessage() == null ? "流式面试落库失败" : e.getMessage()
+                                        )));
                             }
                         }
 
                         @Override
                         public void onError(String message) {
-                            sendSseError(emitter, message == null ? "AI流式面试失败" : message);
+                            interviewSessionService.releaseAnswer(id, requestId);
+                            safeSend(emitter, sseClosed, id, requestId, "error",
+                                    SseEmitter.event().name("error").data(Map.of(
+                                            "message",
+                                            message == null ? "AI流式面试失败" : message
+                                    )));
                         }
                     }
             );
+            } finally {
+                interviewSessionService.releaseTurn(id, requestId);
+            }
         } catch (Exception e) {
+            if (e.getMessage() == null || !e.getMessage().contains("正在处理")) {
+                interviewSessionService.releaseAnswer(id, requestId);
+            }
             sendSseError(emitter, e.getMessage() == null ? "流式面试失败" : e.getMessage());
         }
     }
@@ -316,7 +388,11 @@ public class InterviewServiceImpl implements InterviewService {
             HistoryBundle historyBundle,
             List<InterviewMessage> history,
             String userAnswer,
-            InterviewAnswerAiResult aiResult) {
+            InterviewAnswerAiResult aiResult,
+            int expectedRound) {
+
+        requireRoundNotAdvanced(expectedRound, countUserMessages(
+                interviewMessageService.listByInterviewId(interview.getId())));
 
         InterviewMessage userMessage =
                 interviewMessageService.save(interview.getId(), "USER", userAnswer);
@@ -338,14 +414,18 @@ public class InterviewServiceImpl implements InterviewService {
             nextQuestionMessage = interviewMessageService.save(
                     interview.getId(),
                     "AI",
-                    aiPersistContent
+                    aiPersistContent,
+                    aiResult.getRouteAction(),
+                    aiResult.getToolStatus()
             );
         } else if (!evaluation.isBlank()) {
             aiPersistContent = "【点评】" + evaluation + "\n\n本轮面试问题已足够，可以结束并生成报告。";
             nextQuestionMessage = interviewMessageService.save(
                     interview.getId(),
                     "AI",
-                    aiPersistContent
+                    aiPersistContent,
+                    aiResult.getRouteAction(),
+                    aiResult.getToolStatus()
             );
             shouldContinue = false;
         }
@@ -354,6 +434,18 @@ public class InterviewServiceImpl implements InterviewService {
                 () -> newSession(interview, resume)
         );
         session.setStatus("RUNNING");
+        session.setRound(expectedRound + 1);
+        session.setStage(stageOf(aiResult.getRouteAction()));
+        session.setLastRouteAction(aiResult.getRouteAction());
+        session.setLastToolStatus(aiResult.getToolStatus() == null ? "NONE" : aiResult.getToolStatus());
+        if (shouldContinue && !nextQuestion.isBlank()) {
+            session.setCurrentQuestion(nextQuestion);
+        } else {
+            String asked = findLatestAiQuestion(history);
+            if (asked != null) {
+                session.setCurrentQuestion(asked);
+            }
+        }
         session.setResumeContent(historyBundle.resumeContent());
         if (session.getMessages() == null || session.getMessages().isEmpty()) {
             session.setMessages(toSessionMessages(history));
@@ -369,6 +461,83 @@ public class InterviewServiceImpl implements InterviewService {
         interviewSessionService.save(session);
 
         return new PersistedAnswer(evaluation, nextQuestionMessage, shouldContinue);
+    }
+
+    private InterviewAnswerVO replayVo(Long interviewId, Long userId, InterviewAnswerReplay replay) {
+        Interview interview = getById(interviewId, userId);
+        InterviewMessage message = interviewMessageService.findById(interviewId, replay.getAiMessageId());
+        return new InterviewAnswerVO(
+                interview,
+                replay.getEvaluation(),
+                message,
+                replay.getShouldContinue()
+        );
+    }
+
+    private void sendAnswerDone(
+            SseEmitter emitter,
+            AtomicBoolean sseClosed,
+            Long interviewId,
+            String requestId,
+            InterviewAnswerVO vo,
+            String nextQuestion) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("evaluation", vo.getEvaluation() == null ? "" : vo.getEvaluation());
+        payload.put("nextQuestion", nextQuestion == null ? "" : nextQuestion.trim());
+        payload.put("shouldContinue", Boolean.TRUE.equals(vo.getShouldContinue()));
+        payload.put("message", vo.getNextQuestionMessage());
+        payload.put("interview", vo.getInterview());
+        safeSend(emitter, sseClosed, interviewId, requestId, "done",
+                SseEmitter.event().name("done").data(payload));
+        safeComplete(emitter, sseClosed);
+    }
+
+    /**
+     * SSE 只负责通知。发送失败后不再推，也不把异常交给本轮落库。
+     */
+    private void safeSend(
+            SseEmitter emitter,
+            AtomicBoolean sseClosed,
+            Long interviewId,
+            String requestId,
+            String eventType,
+            SseEmitter.SseEventBuilder event) {
+        if (sseClosed.get()) {
+            return;
+        }
+        try {
+            emitter.send(event);
+        } catch (IOException | IllegalStateException e) {
+            sseClosed.set(true);
+            log.debug("SSE 连接已断开，停止推送。interviewId={}, requestId={}, eventType={}",
+                    interviewId, requestId, eventType);
+        }
+    }
+
+    private void safeComplete(SseEmitter emitter, AtomicBoolean sseClosed) {
+        if (sseClosed.get()) {
+            return;
+        }
+        try {
+            emitter.complete();
+        } catch (IllegalStateException e) {
+            sseClosed.set(true);
+        }
+    }
+
+    private static InterviewAnswerReplay toReplay(PersistedAnswer persisted, InterviewAnswerAiResult aiResult) {
+        InterviewAnswerReplay replay = new InterviewAnswerReplay();
+        replay.setEvaluation(persisted.evaluation());
+        replay.setNextQuestion(aiResult.getNextQuestion() == null ? "" : aiResult.getNextQuestion().trim());
+        replay.setShouldContinue(persisted.shouldContinue());
+        replay.setAiMessageId(persisted.aiMessage() == null ? null : persisted.aiMessage().getId());
+        return replay;
+    }
+
+    private static void requireRequestId(String requestId) {
+        if (requestId == null || requestId.isBlank() || requestId.length() > 64) {
+            throw new RuntimeException("requestId 不能为空");
+        }
     }
 
     private void sendSseError(SseEmitter emitter, String message) {
@@ -405,14 +574,19 @@ public class InterviewServiceImpl implements InterviewService {
                 history
         );
 
-        if (aiResult == null || aiResult.getTotalScore() == null) {
+        if (aiResult == null) {
             throw new RuntimeException("AI未返回有效面试报告");
+        }
+        requireScore(aiResult.getTotalScore());
+        requireScore(aiResult.getJavaScore());
+        requireScore(aiResult.getMysqlScore());
+        requireScore(aiResult.getRedisScore());
+        requireScore(aiResult.getSpringScore());
+        if (aiResult.getSummary() == null || aiResult.getSummary().isBlank()) {
+            throw new RuntimeException("AI返回的面试报告不合法");
         }
 
         Integer totalScore = aiResult.getTotalScore();
-        if (totalScore < 0 || totalScore > 100) {
-            throw new RuntimeException("AI返回的面试总分不合法");
-        }
 
         InterviewReport existing = interviewReportMapper.selectOne(
                 new LambdaQueryWrapper<InterviewReport>()
@@ -422,10 +596,10 @@ public class InterviewServiceImpl implements InterviewService {
         InterviewReport report = existing == null ? new InterviewReport() : existing;
         report.setInterviewId(interview.getId());
         report.setTotalScore(totalScore);
-        report.setJavaScore(normalizeScore(aiResult.getJavaScore()));
-        report.setMysqlScore(normalizeScore(aiResult.getMysqlScore()));
-        report.setRedisScore(normalizeScore(aiResult.getRedisScore()));
-        report.setSpringScore(normalizeScore(aiResult.getSpringScore()));
+        report.setJavaScore(aiResult.getJavaScore());
+        report.setMysqlScore(aiResult.getMysqlScore());
+        report.setRedisScore(aiResult.getRedisScore());
+        report.setSpringScore(aiResult.getSpringScore());
         report.setWeakPoints(toJsonArray(aiResult.getWeakPoints()));
         report.setSuggestions(toJsonArray(aiResult.getSuggestions()));
         report.setSummary(aiResult.getSummary());
@@ -480,6 +654,10 @@ public class InterviewServiceImpl implements InterviewService {
                 resumeContent = resume.getContent();
                 session.setResumeContent(resumeContent);
             }
+            if (session.getRound() == null || session.getStage() == null) {
+                recoverState(session, interviewMessageService.listByInterviewId(interview.getId()));
+                interviewSessionService.save(session);
+            }
             log.debug("面试上下文来自 Redis, interviewId={}", interview.getId());
             return new HistoryBundle(toInterviewMessages(session), resumeContent, cached);
         }
@@ -491,6 +669,7 @@ public class InterviewServiceImpl implements InterviewService {
         InterviewSession session = newSession(interview, resume);
         session.setStatus(interview.getStatus());
         session.setMessages(toSessionMessages(fromDb));
+        recoverState(session, fromDb);
         interviewSessionService.save(session);
 
         return new HistoryBundle(fromDb, resume.getContent(), Optional.of(session));
@@ -556,7 +735,75 @@ public class InterviewServiceImpl implements InterviewService {
         return resume;
     }
 
-    private String findLatestAiQuestion(List<InterviewMessage> history) {
+    private static int countUserMessages(List<InterviewMessage> history) {
+        if (history == null) {
+            return 0;
+        }
+        int rounds = 0;
+        for (InterviewMessage message : history) {
+            if (message.getRole() != null && "USER".equalsIgnoreCase(message.getRole())) {
+                rounds++;
+            }
+        }
+        return rounds;
+    }
+
+    static void requireRoundNotAdvanced(int expectedRound, int currentRound) {
+        if (currentRound > expectedRound) {
+            throw new RuntimeException("当前面试轮次已变化，请重新提交");
+        }
+    }
+
+    /**
+     * Redis 会话丢失时，用已经落库的消息恢复轮次和上一动作。不让模型重新猜阶段。
+     */
+    static void recoverState(InterviewSession session, List<InterviewMessage> messages) {
+        int round = countUserMessages(messages);
+        String lastRoute = null;
+        String lastTool = null;
+        if (messages != null) {
+            for (InterviewMessage message : messages) {
+                if (message.getRole() == null || !"AI".equalsIgnoreCase(message.getRole())) {
+                    continue;
+                }
+                if (message.getRouteAction() != null && !message.getRouteAction().isBlank()) {
+                    lastRoute = message.getRouteAction();
+                }
+                if (message.getToolStatus() != null && !message.getToolStatus().isBlank()) {
+                    lastTool = message.getToolStatus();
+                }
+            }
+        }
+        session.setRound(round);
+        session.setLastRouteAction(lastRoute);
+        session.setLastToolStatus(lastTool == null ? "NONE" : lastTool);
+        session.setStage(stageOf(lastRoute));
+        session.setCurrentQuestion(findLatestAiQuestion(messages));
+    }
+
+    static String stageOf(String routeAction) {
+        if ("probe".equals(routeAction)) {
+            return "probing";
+        }
+        if ("switch".equals(routeAction)) {
+            return "switching";
+        }
+        if ("conclude".equals(routeAction)) {
+            return "concluding";
+        }
+        return "opening";
+    }
+
+    private static void requireScore(Integer score) {
+        if (score == null || score < 0 || score > 100) {
+            throw new RuntimeException("AI返回的面试报告不合法");
+        }
+    }
+
+    private static String findLatestAiQuestion(List<InterviewMessage> history) {
+        if (history == null || history.isEmpty()) {
+            return null;
+        }
         for (int i = history.size() - 1; i >= 0; i--) {
             InterviewMessage message = history.get(i);
             if ("AI".equalsIgnoreCase(message.getRole())) {
@@ -572,19 +819,6 @@ public class InterviewServiceImpl implements InterviewService {
             }
         }
         return null;
-    }
-
-    private Integer normalizeScore(Integer score) {
-        if (score == null) {
-            return 0;
-        }
-        if (score < 0) {
-            return 0;
-        }
-        if (score > 100) {
-            return 100;
-        }
-        return score;
     }
 
     private String toJsonArray(List<String> list) {

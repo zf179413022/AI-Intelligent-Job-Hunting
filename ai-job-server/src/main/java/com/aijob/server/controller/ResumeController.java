@@ -143,9 +143,12 @@ public class ResumeController {
             throw new RuntimeException("请先解析简历");
         }
 
-        // 调用 Python + DeepSeek
+        // 调用 DeepSeek 分析简历
         ResumeAnalysisResult result =
                 aiResumeService.analyze(resume.getContent());
+        if (result == null || result.getScore() == null || result.getScore() < 0 || result.getScore() > 100) {
+            throw new RuntimeException("AI返回的简历评分不合法");
+        }
 
         // 保存 AI 分析结果
         ResumeAiAnalysis analysis = new ResumeAiAnalysis();

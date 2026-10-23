@@ -2,37 +2,22 @@ package com.aijob.server.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
-import org.springframework.web.client.RestClient;
 
-import java.net.http.HttpClient;
-import java.time.Duration;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 @Configuration
 public class RestClientConfig {
 
-    @Bean
-    public RestClient restClient(RestClient.Builder builder) {
-        HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
-                .build();
-        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
-        // 流式面试需要较长读超时
-        factory.setReadTimeout(Duration.ofMinutes(3));
-
-        return builder
-                .baseUrl("http://localhost:8001")
-                .requestFactory(factory)
-                .build();
-    }
-
+    /**
+     * SSE 发送留在平台线程。JDK 21 上 ResponseBodyEmitter 里的 synchronized 可能钉住虚拟线程。
+     * 面试流式的模型读取放到虚拟线程，事件仍由这个池子里的同一次任务按顺序写回 SseEmitter。
+     */
     @Bean(destroyMethod = "shutdown")
     public ExecutorService sseExecutor() {
         return Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r);
-            t.setName("interview-sse-" + t.getId());
+            t.setName("interview-sse-" + t.threadId());
             t.setDaemon(true);
             return t;
         });

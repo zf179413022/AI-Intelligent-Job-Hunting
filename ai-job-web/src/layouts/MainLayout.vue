@@ -21,10 +21,6 @@
           <el-icon><Document /></el-icon>
           <span>我的简历</span>
         </el-menu-item>
-        <el-menu-item index="/resumes">
-          <el-icon><DataAnalysis /></el-icon>
-          <span>AI简历分析</span>
-        </el-menu-item>
         <el-menu-item index="/job-match">
           <el-icon><Suitcase /></el-icon>
           <span>岗位匹配</span>

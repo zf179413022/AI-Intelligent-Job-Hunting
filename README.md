@@ -2,7 +2,7 @@
 
 面向 **Java 后端求职** 场景的 AI 求职平台：JWT 认证、简历分析、岗位匹配、AI 模拟面试，以及基于 LangChain4j 的 **RAG 知识库**（PDF / Markdown → Embedding → Chroma → DeepSeek → Sources / SSE）。
 
-> **定位：** Spring Boot 做业务与 AI 主体；Python FastAPI 仅承载简历分析 / 岗位匹配 / 面试对话等能力，不负责 RAG 主链路。
+> **定位：** Spring Boot 进程内完成业务、简历分析、岗位匹配、模拟面试和 RAG。模型调用使用 LangChain4j，面试一轮回答的路由使用 Spring AI Alibaba Graph。
 
 ---
 
@@ -35,7 +35,7 @@ AI Job Platform
 
 ## 系统架构
 
-> **技术路线：** Java（Spring Boot + MySQL + Redis + LangChain4j + Chroma）是主线；Python FastAPI 只是简历分析 / 岗位匹配 / 面试对话的辅助 AI 服务。**不是** Python 主导、Java 只做转发。
+> **技术路线：** 简历分析、岗位匹配、模拟面试和 RAG 都在 Spring Boot 进程里完成。模型调用用 LangChain4j，面试一轮回答的 probe / switch / conclude 由 Spring AI Alibaba Graph 路由。
 
 ### 图 1 · 总体架构
 
@@ -46,23 +46,20 @@ flowchart TB
 
   mysql[("MySQL<br/>用户/简历/匹配<br/>知识库元数据/问答")]
   redis[("Redis<br/>面试 Session<br/>TTL 7200s")]
-  py["Python FastAPI<br/>简历分析 / 岗位匹配 / 面试"]
-  dsPy["DeepSeek"]
+  ds["DeepSeek"]
 
   rag["LangChain4j RAG<br/>Chunk · Embedding · Retriever · Prompt"]
   chroma[("Chroma Vector DB")]
-  dsRag["DeepSeek"]
   sse["SSE 流式回答"]
 
   vue -->|"JWT / HTTP"| sb
   sb --> mysql
   sb --> redis
-  sb --> py
-  py --> dsPy
+  sb --> ds
   sb --> rag
   rag --> chroma
-  rag --> dsRag
-  dsRag --> sse
+  rag --> ds
+  ds --> sse
   sse --> vue
 ```
 
@@ -71,11 +68,11 @@ flowchart TB
 | 组件 | 职责 |
 |------|------|
 | Vue3 | 登录、简历、匹配、面试、知识库文档 / RAG 问答 UI |
-| Spring Boot | JWT 鉴权、业务编排、资源归属校验（越权 → 403）、RAG 主链路 |
+| Spring Boot | JWT 鉴权、业务编排、简历/匹配/面试、资源归属校验（越权 → 403）、RAG |
 | MySQL | 用户 / 简历 / 匹配 / 面试 / 知识库文档与 Chunk / QA 记录 |
 | Redis | AI 面试临时 Session（TTL 7200s，可降级 MySQL） |
-| Python FastAPI | 仅 DeepSeek 调用侧车：简历分析、岗位匹配、面试流式问答 |
-| LangChain4j + Chroma | **Java 内**完成 Chunk / Embedding / Top-K / Prompt / Sources / SSE |
+| LangChain4j + Chroma | Chunk / Embedding / Top-K / Prompt / Sources / SSE，以及简历、匹配、面试的模型调用 |
+| Spring AI Alibaba Graph | 面试回答后的条件路由：追问、换题、收束。节点内仍调用 LangChain4j |
 
 ```text
                          Vue3 前端
@@ -89,9 +86,9 @@ flowchart TB
                            │
           ┌────────────────┼────────────────┐
           ↓                ↓                ↓
-       MySQL             Redis          Python AI
-   用户/简历/匹配      面试Session       FastAPI
-   知识库元数据/问答                      DeepSeek
+       MySQL             Redis          DeepSeek
+   用户/简历/匹配      面试Session     简历/匹配/面试/RAG
+   知识库元数据/问答
           │
           │ Knowledge RAG（同进程）
           ↓
@@ -132,6 +129,8 @@ flowchart TB
 
 **问答：** Question → Top-K（用户隔离）→ MySQL 取全文 → Context → DeepSeek → Answer + Sources；流式走 `StreamingChatModel` + SSE（`meta` / `delta` / `done` / `error`）
 
+**检索分数：** Chroma 返回 cosine **distance**（越小越相似）；LangChain4j 转为 `EmbeddingMatch.score`（[0,1]，越大越相关）。配置 `knowledge.rag.min-score`（默认 0.2）过滤的是转换后的 score，不是 distance。细节见 [`docs/architecture.md`](docs/architecture.md)。
+
 Markdown 清洗：保留标题文字与代码正文；去掉 YAML frontmatter、链接/图片 URL、代码围栏与语言标记；MD 的 `pageCount` 为 `null`。
 
 更完整的可打印版（含简历口述要点）见 [`docs/architecture.md`](docs/architecture.md)。
@@ -157,8 +156,7 @@ Markdown 清洗：保留标题文字与代码正文；去掉 YAML frontmatter、
 | 前端 | Vue 3、TypeScript、Vite、Element Plus |
 | 后端 | Java 21、Spring Boot 3.5、MyBatis-Plus、Spring Security、JWT |
 | 数据 | MySQL、Redis |
-| AI（Java） | LangChain4j、DeepSeek（OpenAI 兼容）、本地 Embedding、Chroma |
-| AI（Python） | FastAPI、DeepSeek（简历 / 匹配 / 面试） |
+| AI | LangChain4j、DeepSeek（OpenAI 兼容）、本地 Embedding、Chroma、Spring AI Alibaba Graph（面试路由） |
 | 基础设施 | Docker Compose（MySQL + Redis + Chroma） |
 
 ---
@@ -171,11 +169,10 @@ AI-Intelligent-Job-Hunting/
 ├── scripts/start-infra.cmd  # Windows 一键起基础设施
 ├── docs/architecture.md     # 架构图说明
 ├── ai-job-web/              # Vue3 前端
-├── ai-job-server/           # Spring Boot 主服务（含 RAG）
+├── ai-job-server/           # Spring Boot 主服务（含 RAG 与面试编排）
 │   ├── docker-compose.chroma.yml  # 仅 Chroma（可选）
 │   ├── sql/                 # 建表脚本（Compose 首次自动导入）
 │   └── src/
-├── ai-python-service/       # FastAPI（简历/匹配/面试）
 └── README.md
 ```
 
@@ -184,11 +181,11 @@ AI-Intelligent-Job-Hunting/
 ## 快速启动
 
 > **基础设施（推荐）：** 仓库根目录 `docker compose up -d` 一次性启动 **MySQL + Redis + Chroma**。  
-> Spring Boot / Python / Vue 仍本机运行（降低全量容器化复杂度）。
+> Spring Boot / Vue 仍本机运行。
 
 ### 0. 前置
 
-- JDK 21、Maven、Node.js 18+、Python 3.10+、Docker Desktop
+- JDK 21、Maven、Node.js 18+、Docker Desktop
 - DeepSeek API Key
 - 若本机已占用 `3306` / `6379` / `8000`，请先停止本机 MySQL / Redis / 旧 Chroma
 
@@ -211,25 +208,14 @@ docker compose ps
 
 ### 2. 配置密钥
 
+在启动 Spring Boot 的环境里设置（不要写进仓库）：
+
 ```bash
-# ai-python-service/.env（可参考 .env.example）
 DEEPSEEK_API_KEY=你的密钥
 DEEPSEEK_MODEL=deepseek-v4-flash
 ```
 
-Spring Boot 通过**同名环境变量**读取 `DEEPSEEK_API_KEY`（不要写进仓库配置文件）。
-
-### 3. 启动 Python AI 服务
-
-```bash
-cd ai-python-service
-python -m venv venv
-# Windows: venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8001 --reload
-```
-
-### 4. 启动 Spring Boot
+### 3. 启动 Spring Boot
 
 ```bash
 cd ai-job-server
@@ -240,7 +226,7 @@ mvn spring-boot:run
 
 默认：`http://127.0.0.1:8080`（已对接 Compose 的 MySQL / Redis / Chroma）
 
-### 5. 启动前端
+### 4. 启动前端
 
 ```bash
 cd ai-job-web

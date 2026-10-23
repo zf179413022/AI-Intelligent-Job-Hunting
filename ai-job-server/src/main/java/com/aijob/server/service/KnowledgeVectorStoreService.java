@@ -31,7 +31,12 @@ public interface KnowledgeVectorStoreService {
     long countByDocument(Long documentId, Long userId);
 
     /**
-     * Top-K 相似度检索（强制 user_id 过滤；可选 document_id）。
+     * Top-K 向量检索（强制 user_id 过滤；可选 document_id）。
+     * <p>
+     * {@code minScore} 对应 LangChain4j {@code EmbeddingSearchRequest#minScore}：
+     * 过滤的是转换后的 relevance score（越大越相关），不是 Chroma 原始 distance。
+     * 新建 collection 时 ChromaEmbeddingStore 使用 cosine distance；查询后
+     * {@code distance → score}，再保留 {@code score >= minScore} 的命中。
      */
     List<KnowledgeSourceVO> searchTopK(
             String question,

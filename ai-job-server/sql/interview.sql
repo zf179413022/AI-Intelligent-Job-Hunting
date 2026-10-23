@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS interview_message (
 
     role VARCHAR(20) NOT NULL COMMENT 'AI 或 USER',
     content TEXT NOT NULL COMMENT '本轮文本内容',
+    route_action VARCHAR(20) DEFAULT NULL COMMENT '本轮路由 probe/switch/conclude，仅 AI 消息',
+    tool_status VARCHAR(20) DEFAULT NULL COMMENT '知识库工具 NONE/SUCCESS/FAILED，仅 AI 消息',
 
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '消息时间（对齐项目 created_at 命名）',
 

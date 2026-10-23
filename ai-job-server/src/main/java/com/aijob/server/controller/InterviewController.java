@@ -61,11 +61,12 @@ public class InterviewController {
     public InterviewAnswerVO answer(
             @PathVariable Long id,
             @Valid @RequestBody InterviewAnswerRequest request) {
-        return interviewService.answer(id, currentUser().getId(), request.getAnswer());
+        return interviewService.answer(id, currentUser().getId(), request.getAnswer(), request.getRequestId());
     }
 
     /**
-     * SSE 流式回答：event=delta|done|error
+     * SSE 流式回答：event=tool|route|delta|done|error。
+     * 客户端断开只停止推送，不取消这一轮的落库。
      */
     @PostMapping(value = "/{id}/answer/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter answerStream(
@@ -73,12 +74,13 @@ public class InterviewController {
             @Valid @RequestBody InterviewAnswerRequest request) {
         Long userId = currentUser().getId();
         String answer = request.getAnswer();
+        String requestId = request.getRequestId();
         SecurityContext securityContext = SecurityContextHolder.getContext();
         SseEmitter emitter = new SseEmitter(180_000L);
 
         Runnable task = () -> {
             try {
-                interviewService.answerStream(id, userId, answer, emitter);
+                interviewService.answerStream(id, userId, answer, requestId, emitter);
             } catch (Exception e) {
                 try {
                     emitter.send(SseEmitter.event()

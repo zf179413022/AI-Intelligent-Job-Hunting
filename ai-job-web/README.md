@@ -15,7 +15,6 @@ npm run dev
 请同时启动：
 
 - Java：`http://localhost:8080`
-- Python（AI 分析时需要）：`http://localhost:8001`
 
 开发环境通过 Vite 代理 `/api` → `http://localhost:8080`，无需改后端 CORS。
 

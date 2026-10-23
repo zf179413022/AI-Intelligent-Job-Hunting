@@ -13,23 +13,20 @@ flowchart TB
 
   mysql[("MySQL<br/>用户/简历/匹配<br/>知识库元数据/问答")]
   redis[("Redis<br/>面试 Session<br/>TTL 7200s")]
-  py["Python FastAPI<br/>简历分析 / 岗位匹配 / 面试"]
-  dsPy["DeepSeek"]
+  ds["DeepSeek"]
 
   rag["LangChain4j RAG<br/>Chunk · Embedding · Retriever · Prompt"]
   chroma[("Chroma Vector DB")]
-  dsRag["DeepSeek"]
   sse["SSE 流式回答"]
 
   vue -->|"JWT / HTTP"| sb
   sb --> mysql
   sb --> redis
-  sb --> py
-  py --> dsPy
+  sb --> ds
   sb --> rag
   rag --> chroma
-  rag --> dsRag
-  dsRag --> sse
+  rag --> ds
+  ds --> sse
   sse --> vue
 ```
 
@@ -47,9 +44,8 @@ flowchart TB
                            │
           ┌────────────────┼────────────────┐
           ↓                ↓                ↓
-       MySQL             Redis          Python AI
-   用户/简历/匹配      面试Session       FastAPI
-   知识库/问答                         DeepSeek
+       MySQL             Redis          DeepSeek
+   用户/简历/匹配      面试Session     简历/匹配/面试/RAG
           │
           │ Knowledge RAG（Java 同进程）
           ↓
@@ -73,9 +69,9 @@ flowchart TB
 
 ### 为什么这样画（面试一句话）
 
-- **Spring Boot** 是业务与 AI 编排中心：鉴权、持久化、RAG、权限 403。
-- **Python** 是独立 AI 侧车，只服务简历 / 匹配 / 面试对话。
-- **RAG 不在 Python**：Embedding、Chroma、RAG Prompt 全在 Java + LangChain4j。
+- **Spring Boot** 是业务与 AI 编排中心：鉴权、持久化、简历分析、岗位匹配、面试、RAG。
+- **面试一轮回答**用 Spring AI Alibaba Graph 做条件路由，节点内部仍调用 LangChain4j。
+- **RAG** 的 Embedding、Chroma、Prompt 都在 Java 进程里。
 
 ---
 
@@ -113,9 +109,11 @@ PDF/MD → PDFBox / MdTextExtractor → PARSED
       → READY
 
 【问答】
-Question → Top-K（user 隔离）→ MySQL 取 Chunk 全文
-        → Context 注入 Prompt → DeepSeek
-        → Answer + Sources
+Question → 原问题 Embedding（无改写）
+        → Chroma Top-K（user 隔离；底层 distance → LangChain4j score）
+        → min-score 过滤（卡 score，越大越相关）
+        → MySQL 取 Chunk 全文 → Context 注入 Prompt → DeepSeek
+        → Answer + Sources（含 score）
         → 可选 SSE（meta / delta / done / error）
 ```
 
@@ -129,12 +127,24 @@ Question → Top-K（user 隔离）→ MySQL 取 Chunk 全文
 
 重复 Ingest：先按 `document_id` + `user_id` 删除旧 Chunk / 向量，再写入。
 
+### 检索分数语义（distance vs score）
+
+| 层级 | 字段 / API | 语义 |
+|------|------------|------|
+| Chroma HTTP | `distances` | **越小越相似**（新建 collection 默认 cosine distance） |
+| LangChain4j | `EmbeddingMatch#score()` | **越大越相关**，约 [0, 1] |
+| 本项目配置 | `knowledge.rag.min-score` | 卡的是转换后的 **score**（`score >= min-score`） |
+| 本项目 VO | `KnowledgeSourceVO.score` | 同上，给前端 Sources 展示 |
+
+转换由 `ChromaEmbeddingStore` 完成（余弦情形大致为：`similarity = 1 - distance`，再经 `RelevanceScore.fromCosineSimilarity` 映射到 [0,1]）。业务代码不要把 `score` 当成 distance 解读。换 Embedding 模型后分数分布会变，`min-score` 需重新标定。
+
 ---
 
 ## 与「错误讲法」的对比
 
 | 错误印象 | 本项目实际 |
 |----------|------------|
-| Python 做全部 AI，Java 只调 HTTP | Java 做 RAG + 业务；Python 只做部分 DeepSeek 调用 |
+| Python 做全部 AI，Java 只调 HTTP | 简历、匹配、面试和 RAG 都在 Java 进程里调用 DeepSeek |
 | 向量库无隔离 | Chroma metadata + Service 层归属校验 + 403 |
 | 只有同步问答 | 同步 `/ask` + SSE `/ask/stream` |
+| `score` 就是 Chroma distance / 越小越好 | Chroma 返回 distance；业务用的是 LangChain4j 转后的 relevance score（越大越好） |

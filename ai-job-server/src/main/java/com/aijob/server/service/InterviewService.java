@@ -23,12 +23,13 @@ public interface InterviewService {
 
     InterviewStartVO start(Long id, Long userId);
 
-    InterviewAnswerVO answer(Long id, Long userId, String answer);
+    InterviewAnswerVO answer(Long id, Long userId, String answer, String requestId);
 
     /**
      * SSE 流式回答：delta 推送文本，done 时一次性落库 + 刷新 Redis。
+     * 相同 requestId 重复提交时直接返回上一次结果，不再推进轮次。
      */
-    void answerStream(Long id, Long userId, String answer, SseEmitter emitter);
+    void answerStream(Long id, Long userId, String answer, String requestId, SseEmitter emitter);
 
     InterviewReport finish(Long id, Long userId);
 

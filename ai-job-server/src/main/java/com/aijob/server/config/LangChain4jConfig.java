@@ -66,6 +66,10 @@ public class LangChain4jConfig {
 
     /**
      * LangChain4j Chroma 客户端（连接 Docker 持久化 Chroma HTTP 服务）。
+     * <p>
+     * 新建 collection 默认 cosine distance；检索时 Chroma 返回 distances，
+     * {@link ChromaEmbeddingStore} 转为 {@code EmbeddingMatch#score()}（[0,1]，越大越相关）
+     * 后再按 {@code minScore} 过滤。业务代码应使用 score，不要把 score 当成 distance。
      */
     @Bean
     public EmbeddingStore<TextSegment> knowledgeEmbeddingStore(

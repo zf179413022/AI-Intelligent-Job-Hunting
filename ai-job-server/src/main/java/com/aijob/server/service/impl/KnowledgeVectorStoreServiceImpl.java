@@ -114,6 +114,7 @@ public class KnowledgeVectorStoreServiceImpl implements KnowledgeVectorStoreServ
             throw new RuntimeException("userId 不能为空");
         }
 
+        // 问题原样 Embedding（无改写）；与入库共用同一 EmbeddingModel
         Embedding queryEmbedding = embeddingModel.embed(question.trim()).content();
 
         Filter filter = metadataKey("user_id").isEqualTo(String.valueOf(userId));
@@ -121,6 +122,8 @@ public class KnowledgeVectorStoreServiceImpl implements KnowledgeVectorStoreServ
             filter = filter.and(metadataKey("document_id").isEqualTo(String.valueOf(documentId)));
         }
 
+        // minScore：LangChain4j relevance score 下限（越大越相关）。
+        // Chroma 底层返回 cosine distance，由 ChromaEmbeddingStore 转为 score 后再过滤。
         EmbeddingSearchResult<TextSegment> result = knowledgeEmbeddingStore.search(
                 EmbeddingSearchRequest.builder()
                         .queryEmbedding(queryEmbedding)

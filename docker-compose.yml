@@ -4,7 +4,7 @@
 #   docker compose ps
 #   docker compose down
 #
-# Spring Boot / Python / Vue 仍在本机运行，连接：
+# Spring Boot / Vue 仍在本机运行，连接：
 #   MySQL  127.0.0.1:3306  root/root  库 ai_job_platform
 #   Redis  127.0.0.1:6379
 #   Chroma 127.0.0.1:8000

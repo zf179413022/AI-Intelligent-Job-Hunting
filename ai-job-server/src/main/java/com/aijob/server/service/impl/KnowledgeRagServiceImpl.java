@@ -38,6 +38,11 @@ public class KnowledgeRagServiceImpl implements KnowledgeRagService {
 
     private static final String PROVIDER = "langchain4j-rag/chroma+deepseek";
     private static final String PROVIDER_STREAM = "langchain4j-rag/chroma+deepseek-stream";
+    /**
+     * 与 {@code KnowledgeRagAssistant} 的系统提示约定一致。
+     * 模型用这句话表示资料不足以回答时，检索命中不能当作引用。
+     */
+    static final String UNANSWERABLE_MARK = "根据当前知识库资料无法确定";
 
     private final KnowledgeVectorStoreService knowledgeVectorStoreService;
     private final KnowledgeDocumentMapper knowledgeDocumentMapper;
@@ -49,6 +54,10 @@ public class KnowledgeRagServiceImpl implements KnowledgeRagService {
     @Value("${knowledge.rag.top-k:5}")
     private int defaultTopK;
 
+    /**
+     * 检索命中最低 relevance score（越大越相关；非 Chroma 原始 distance）。
+     * 见 {@code knowledge.rag.min-score} 与 ChromaEmbeddingStore 的 distance→score 转换。
+     */
     @Value("${knowledge.rag.min-score:0.2}")
     private double minScore;
 
@@ -174,22 +183,33 @@ public class KnowledgeRagServiceImpl implements KnowledgeRagService {
             String answer,
             String provider,
             Long userId) {
+        List<KnowledgeSourceVO> sources = sourcesToCite(answer, retrieved.getSources());
         KnowledgeQa qa = new KnowledgeQa();
         qa.setUserId(userId);
         qa.setQuestion(retrieved.getQuestion());
         qa.setAnswer(answer);
-        qa.setSourceChunkIds(toChunkIdJson(retrieved.getSources()));
+        qa.setSourceChunkIds(toChunkIdJson(sources));
         knowledgeQaMapper.insert(qa);
 
         return new KnowledgeAskVO(
                 retrieved.getQuestion(),
                 answer,
-                retrieved.getSources(),
+                sources,
                 retrieved.getTopK(),
-                retrieved.getHitCount(),
+                sources.size(),
                 provider,
                 qa.getId()
         );
+    }
+
+    /**
+     * 资料不足以回答时，向量检索仍可能返回弱相关片段。这些片段没有被回答采用，不能展示为参考资料。
+     */
+    static List<KnowledgeSourceVO> sourcesToCite(String answer, List<KnowledgeSourceVO> retrieved) {
+        if (answer != null && answer.contains(UNANSWERABLE_MARK)) {
+            return List.of();
+        }
+        return retrieved == null ? List.of() : retrieved;
     }
 
     private void sendSseError(SseEmitter emitter, String message) {

@@ -2,6 +2,12 @@ spring:
   application:
     name: ai-job-server
 
+  threads:
+    virtual:
+      # 同步的简历分析、岗位匹配、面试开场和报告跑在 Tomcat 虚拟线程上。
+      # SSE 发送仍用平台线程池，见 RestClientConfig。
+      enabled: true
+
   datasource:
     url: jdbc:mysql://localhost:3306/ai_job_platform?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
     username: ${MYSQL_USERNAME:root}
@@ -52,6 +58,8 @@ langchain4j:
       model-name: ${DEEPSEEK_MODEL:deepseek-v4-flash}
       temperature: 0.3
       timeout: PT60S
+      # 连接失败时的额外重试次数，LangChain4j 内部指数退避。不含已开始输出的流式调用。
+      max-retries: 3
       log-requests: false
       log-responses: false
     # RAG 5.9：流式 ChatModel（与同步 chat-model 共用 DeepSeek 配置）
@@ -61,6 +69,8 @@ langchain4j:
       model-name: ${DEEPSEEK_MODEL:deepseek-v4-flash}
       temperature: 0.3
       timeout: PT120S
+      # 流式只再试 1 次，避免连接中途失败后把已推给前端的 delta 整段重放。
+      max-retries: 1
       log-requests: false
       log-responses: false
 
@@ -71,7 +81,23 @@ knowledge:
     collection-name: knowledge_chunks
     timeout-seconds: 60
   rag:
-    # Top-K 相似度检索条数（默认 5，允许请求覆盖）
+    # Top-K 检索条数（默认 5，允许请求覆盖，上限见 KnowledgeAskRequest）
     top-k: 5
-    # 最低相似度分数（LangChain4j cosine score，0~1）；过低则不注入该命中
+    # 最低相关性分数（越大越相关）。Chroma HTTP 返回的是 cosine distance（越小越相似）；
+    # LangChain4j ChromaEmbeddingStore 会转成 EmbeddingMatch.score ∈ [0,1]（越大越相关），
+    # 本配置卡的是转换后的 score（score >= min-score 才保留）。换 Embedding 模型后需重标定。
     min-score: 0.2
+
+# 指标在 /actuator/metrics（需登录）。没有 Collector 时不导出，避免启动去连 localhost:4318。
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  tracing:
+    enabled: ${OTEL_TRACING_ENABLED:false}
+  otlp:
+    metrics:
+      export:
+        enabled: ${OTEL_METRICS_ENABLED:false}
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:}

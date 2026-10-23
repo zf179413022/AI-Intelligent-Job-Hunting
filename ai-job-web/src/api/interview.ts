@@ -19,10 +19,10 @@ export function startInterview(id: number) {
   }) as Promise<InterviewStartResult>
 }
 
-export function answerInterview(id: number, answer: string) {
+export function answerInterview(id: number, answer: string, requestId: string) {
   return request.post(
     `/api/interviews/${id}/answer`,
-    { answer },
+    { answer, requestId },
     { timeout: 120000 },
   ) as Promise<InterviewAnswerResult>
 }
@@ -37,6 +37,8 @@ export interface InterviewStreamDone {
 }
 
 export interface AnswerStreamHandlers {
+  onTool?: (name: string, status: string) => void
+  onRoute?: (action: string) => void
   onDelta?: (content: string) => void
   onDone?: (result: InterviewStreamDone) => void
   onError?: (message: string) => void
@@ -44,11 +46,12 @@ export interface AnswerStreamHandlers {
 
 /**
  * POST /api/interviews/{id}/answer/stream
- * 使用 fetch 读取 SSE（支持 Authorization），事件：delta | done | error
+ * 使用 fetch 读取 SSE（支持 Authorization），事件：tool | route | delta | done | error
  */
 export async function answerInterviewStream(
   id: number,
   answer: string,
+  requestId: string,
   handlers: AnswerStreamHandlers = {},
   signal?: AbortSignal,
 ): Promise<void> {
@@ -60,7 +63,7 @@ export async function answerInterviewStream(
       Accept: 'text/event-stream',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ answer }),
+    body: JSON.stringify({ answer, requestId }),
     signal,
   })
 
@@ -86,7 +89,25 @@ export async function answerInterviewStream(
       return
     }
 
-    if (eventName === 'delta') {
+    if (eventName === 'tool') {
+      try {
+        const json = JSON.parse(payload) as { name?: string; status?: string }
+        if (json.name && json.status) {
+          handlers.onTool?.(json.name, json.status)
+        }
+      } catch {
+        // 工具事件解析失败时忽略，避免打断后续 delta
+      }
+    } else if (eventName === 'route') {
+      try {
+        const json = JSON.parse(payload) as { action?: string }
+        if (json.action) {
+          handlers.onRoute?.(json.action)
+        }
+      } catch {
+        // 路由事件解析失败时忽略
+      }
+    } else if (eventName === 'delta') {
       try {
         const json = JSON.parse(payload) as { content?: string }
         if (json.content) {

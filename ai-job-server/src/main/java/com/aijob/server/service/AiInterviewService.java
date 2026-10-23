@@ -16,11 +16,14 @@ public interface AiInterviewService {
             String position,
             List<InterviewMessage> history,
             String currentQuestion,
-            String userAnswer
+            String userAnswer,
+            Long userId,
+            Long interviewId
     );
 
     /**
-     * 调用 Python SSE 流式点评接口，通过 handler 回调 delta / done / error。
+     * 流式点评。delta 为标记原文，done 为解析后的结果。
+     * userId 只用于按需检索该用户自己的知识库。
      */
     void answerStream(
             String resumeContent,
@@ -28,6 +31,8 @@ public interface AiInterviewService {
             List<InterviewMessage> history,
             String currentQuestion,
             String userAnswer,
+            Long userId,
+            Long interviewId,
             InterviewAnswerStreamHandler handler
     );
 

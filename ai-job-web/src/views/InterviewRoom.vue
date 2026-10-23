@@ -60,7 +60,7 @@
           <div class="role">AI 面试官</div>
           <div class="content">
             <template v-if="thinking && !streamText">
-              <span class="thinking">AI 正在思考</span>
+              <span class="thinking">{{ agentStatus || 'AI 正在思考' }}</span>
               <span class="dots">...</span>
             </template>
             <template v-else>
@@ -133,6 +133,7 @@ const chatBox = ref<HTMLElement | null>(null)
 
 const streaming = ref(false)
 const thinking = ref(false)
+const agentStatus = ref('')
 const streamText = ref('')
 let abortController: AbortController | null = null
 let tempUserMsgId: number | null = null
@@ -214,6 +215,7 @@ async function onAnswer() {
   answering.value = true
   streaming.value = true
   thinking.value = true
+  agentStatus.value = ''
   streamText.value = ''
   lastEvaluation.value = ''
 
@@ -232,12 +234,24 @@ async function onAnswer() {
 
   abortController?.abort()
   abortController = new AbortController()
+  const requestId = crypto.randomUUID()
 
   try {
     await answerInterviewStream(
       interviewId.value,
       text,
+      requestId,
       {
+        onTool: (_name, status) => {
+          if (status === 'START') agentStatus.value = '正在对照知识库'
+          else if (status === 'FAILED') agentStatus.value = '无法对照知识库'
+          else if (status === 'SUCCESS') agentStatus.value = '已对照知识库'
+        },
+        onRoute: (action) => {
+          if (action === 'probe') agentStatus.value = '继续追问'
+          else if (action === 'switch') agentStatus.value = '切换问题'
+          else if (action === 'conclude') agentStatus.value = '准备收束'
+        },
         onDelta: (chunk) => {
           thinking.value = false
           streamText.value += chunk
@@ -246,6 +260,7 @@ async function onAnswer() {
         onDone: async (result) => {
           streaming.value = false
           thinking.value = false
+          agentStatus.value = ''
           streamText.value = ''
           tempUserMsgId = null
 
@@ -264,6 +279,7 @@ async function onAnswer() {
         onError: async (message) => {
           streaming.value = false
           thinking.value = false
+          agentStatus.value = ''
           streamText.value = ''
           if (tempUserMsgId != null) {
             messages.value = messages.value.filter((m) => m.id !== tempUserMsgId)

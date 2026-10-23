@@ -17,11 +17,30 @@ public class InterviewMessageServiceImpl implements InterviewMessageService {
 
     @Override
     public InterviewMessage save(Long interviewId, String role, String content) {
+        return save(interviewId, role, content, null, null);
+    }
+
+    @Override
+    public InterviewMessage save(Long interviewId, String role, String content, String routeAction, String toolStatus) {
         InterviewMessage message = new InterviewMessage();
         message.setInterviewId(interviewId);
         message.setRole(role);
         message.setContent(content);
+        message.setRouteAction(routeAction);
+        message.setToolStatus(toolStatus);
         interviewMessageMapper.insert(message);
+        return message;
+    }
+
+    @Override
+    public InterviewMessage findById(Long interviewId, Long messageId) {
+        if (interviewId == null || messageId == null) {
+            return null;
+        }
+        InterviewMessage message = interviewMessageMapper.selectById(messageId);
+        if (message == null || !interviewId.equals(message.getInterviewId())) {
+            return null;
+        }
         return message;
     }
 

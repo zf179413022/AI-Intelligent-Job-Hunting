@@ -65,7 +65,11 @@
       <div class="section-title">参考资料（Sources）</div>
       <el-empty
         v-if="!current.sources?.length && !asking"
-        description="未检索到相关资料（知识库可能无覆盖该主题）"
+        :description="
+          isUnanswerable(current.answer)
+            ? '资料不足以回答，未展示参考资料'
+            : '未检索到相关资料（知识库可能无覆盖该主题）'
+        "
         :image-size="72"
       />
       <div v-else-if="current.sources?.length" class="sources">
@@ -127,6 +131,10 @@ function formatScore(score: number) {
   return Number(score).toFixed(4)
 }
 
+function isUnanswerable(answer?: string | null) {
+  return Boolean(answer && answer.includes('根据当前知识库资料无法确定'))
+}
+
 async function onAsk() {
   const q = question.value.trim()
   if (!q || asking.value) return
@@ -170,7 +178,9 @@ async function onAsk() {
         onDone: (result) => {
           current.value = result
           history.value = [result, ...history.value].slice(0, 20)
-          if (!result.sources?.length) {
+          if (isUnanswerable(result.answer)) {
+            ElMessage.info('根据当前知识库资料无法确定，未引用参考资料')
+          } else if (!result.sources?.length) {
             ElMessage.warning('未检索到相关资料，请检查知识库是否已入库相关文档')
           } else {
             ElMessage.success(`流式完成，引用 ${result.sources.length} 条资料`)
