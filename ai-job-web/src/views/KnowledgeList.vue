@@ -116,7 +116,11 @@
         <el-table-column prop="id" label="chunkId" width="90" />
         <el-table-column prop="vectorId" label="vectorId" width="120" show-overflow-tooltip />
         <el-table-column prop="tokenEstimate" label="字数" width="80" />
-        <el-table-column prop="content" label="内容" min-width="280" show-overflow-tooltip />
+        <el-table-column label="内容" min-width="320">
+          <template #default="{ row }">
+            <pre class="chunk-content">{{ row.content }}</pre>
+          </template>
+        </el-table-column>
       </el-table>
     </el-drawer>
   </div>
@@ -333,6 +337,18 @@ onMounted(() => {
 
 .error-alert {
   margin-top: 16px;
+}
+
+/* 分块内容必须保留换行与缩进：表格靠换行分列，代码块靠缩进表达嵌套 */
+.chunk-content {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 :deep(.row-duplicate-highlight) {

@@ -22,7 +22,23 @@ class KnowledgeTextChunkerTest {
         List<String> chunks = KnowledgeTextChunker.chunkBlocks(blocks, 200, 20);
 
         assertTrue(chunks.stream().anyMatch(chunk -> chunk.contains("| 3 | 4 |")));
-        assertTrue(chunks.stream().anyMatch(chunk -> chunk.contains("| --- | --- |")));
+        // 表格靠换行分列，压成一行会让 LLM 无法区分「行」与「列」
+        assertTrue(chunks.stream().anyMatch(chunk -> chunk.contains("\n| --- | --- |\n")),
+                "表格 chunk 必须保留换行：" + chunks);
+    }
+
+    @Test
+    void codeChunkKeepsIndentAndLineBreaks() {
+        String code = "public class Demo {\n    void run() {\n        System.out.println(1);\n    }\n}";
+        List<DocumentBlock> blocks = List.of(
+                DocumentBlock.heading(2, "示例代码"),
+                DocumentBlock.code(code, "java")
+        );
+
+        List<String> chunks = KnowledgeTextChunker.chunkBlocks(blocks, 300, 20);
+
+        assertTrue(chunks.stream().anyMatch(chunk -> chunk.contains("```java\n" + code + "\n```")),
+                "代码 chunk 必须保留围栏、缩进与换行：" + chunks);
     }
 
     @Test
